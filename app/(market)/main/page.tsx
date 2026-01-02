@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useExchangeRate } from "@/hooks/useExchangeRate";
 
 interface CoinData {
@@ -16,6 +16,37 @@ interface CoinData {
   kimchiPremium?: number;
 }
 
+interface BinanceTicker24hr {
+  symbol: string;
+  lastPrice: string;
+  priceChange: string;
+  priceChangePercent: string;
+  highPrice: string;
+  lowPrice: string;
+  volume: string;
+}
+
+interface BinanceWebSocketTicker {
+  s: string; // symbol
+  c: string; // last price
+  P: string; // price change percent
+  h: string; // high price
+  l: string; // low price
+  v: string; // volume
+}
+
+interface BithumbTicker {
+  opening_price: string; // 시가
+  closing_price: string; // 종가 (현재가)
+  min_price: string; // 저가
+  max_price: string; // 고가
+  units_traded: string; // 거래량
+  acc_trade_value: string; // 거래금액
+  prev_closing_price: string; // 전일종가
+  fluctate_24H: string; // 24시간 변동금액
+  fluctate_rate_24H: string; // 24시간 변동률
+}
+
 export default function MainPage() {
   const [coins, setCoins] = useState<Map<string, CoinData>>(new Map());
   const [searchQuery, setSearchQuery] = useState("");
@@ -25,9 +56,28 @@ export default function MainPage() {
     Map<string, "up" | "down" | null>
   >(new Map());
   const prevPricesRef = useRef<Map<string, number>>(new Map());
+  // WebSocket 데이터를 ref에 누적
+  const coinsRef = useRef<Map<string, CoinData>>(new Map());
+  // 빗썸 데이터를 ref에 누적 (심볼 -> 가격 매핑)
+  const bithumbPricesRef = useRef<Map<string, number>>(new Map());
 
-  // 실시간 환율 가져오기 (1분마다 업데이트)
-  const usdtToKrwRate = useExchangeRate(60 * 1000, 1350);
+  // 환율 변경 콜백 메모이제이션
+  const handleRateChange = useCallback((newRate: number) => {
+    // 환율이 변경될 때만 모든 코인의 koreanPrice 업데이트
+    setCoins((prevCoins) => {
+      const updatedCoins = new Map(prevCoins);
+      prevCoins.forEach((coin, symbol) => {
+        updatedCoins.set(symbol, {
+          ...coin,
+          koreanPrice: coin.price * newRate,
+        });
+      });
+      return updatedCoins;
+    });
+  }, []);
+
+  // 실시간 환율 가져오기 (10초 마다 업데이트, useRef 사용)
+  const usdtToKrwRateRef = useExchangeRate(10 * 1000, 1400, handleRateChange);
 
   const coinMap: { [key: string]: string } = {
     BTCUSDT: "비트코인",
@@ -39,6 +89,19 @@ export default function MainPage() {
     DOGEUSDT: "도지코인",
     DOTUSDT: "폴카닷",
     AVAXUSDT: "아발란체",
+  };
+
+  // Binance 심볼 -> 빗썸 심볼 매핑
+  const bithumbSymbolMap: { [key: string]: string } = {
+    BTCUSDT: "BTC",
+    ETHUSDT: "ETH",
+    XRPUSDT: "XRP",
+    SOLUSDT: "SOL",
+    BNBUSDT: "BNB",
+    ADAUSDT: "ADA",
+    DOGEUSDT: "DOGE",
+    DOTUSDT: "DOT",
+    AVAXUSDT: "AVAX",
   };
 
   const majorCoins = [
@@ -73,7 +136,7 @@ export default function MainPage() {
         const dataArray = await Promise.all(promises);
         const initialCoins = new Map<string, CoinData>();
 
-        dataArray.forEach((ticker: any) => {
+        dataArray.forEach((ticker: BinanceTicker24hr | null) => {
           if (!ticker) return;
 
           const price = parseFloat(ticker.lastPrice);
@@ -83,7 +146,7 @@ export default function MainPage() {
           const low24h = parseFloat(ticker.lowPrice);
           const volume24h = parseFloat(ticker.volume);
 
-          const koreanPrice = price * usdtToKrwRate;
+          const koreanPrice = price * usdtToKrwRateRef.current;
           // 김프 계산: 실제로는 한국 거래소 가격을 가져와서 비교해야 함
           // 현재는 예시로 0%로 설정 (한국 거래소 API 연동 필요)
           const kimchiPremium = 0;
@@ -108,12 +171,73 @@ export default function MainPage() {
         });
 
         setCoins(initialCoins);
+        coinsRef.current = new Map(initialCoins);
       } catch (error) {
         console.error("Error fetching initial data:", error);
       }
     };
 
     fetchInitialData();
+
+    // 빗썸 데이터 가져오기 (500ms마다 폴링)
+    const fetchBithumbData = async () => {
+      try {
+        const response = await fetch(
+          "https://api.bithumb.com/public/ticker/ALL_KRW"
+        );
+        if (response.ok) {
+          const data = await response.json();
+          if (data.status === "0000" && data.data) {
+            // 빗썸 데이터를 ref에 저장
+            Object.entries(bithumbSymbolMap).forEach(
+              ([binanceSymbol, bithumbSymbol]) => {
+                const ticker = data.data[bithumbSymbol] as
+                  | BithumbTicker
+                  | undefined;
+                if (ticker) {
+                  const price = parseFloat(ticker.closing_price);
+                  bithumbPricesRef.current.set(
+                    binanceSymbol.replace("USDT", ""),
+                    price
+                  );
+                }
+              }
+            );
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching Bithumb data:", error);
+      }
+    };
+
+    // 초기 로딩
+    fetchBithumbData();
+
+    // 500ms마다 빗썸 데이터 업데이트
+    const bithumbInterval = setInterval(fetchBithumbData, 500);
+
+    // 초당 2번(500ms마다) ref의 데이터를 state로 업데이트
+    const updateInterval = setInterval(() => {
+      // 빗썸 가격과 매칭하여 koreanPrice 및 kimchiPremium 업데이트
+      const updatedCoins = new Map(coinsRef.current);
+      updatedCoins.forEach((coin, symbol) => {
+        const bithumbPrice = bithumbPricesRef.current.get(symbol);
+        const binancePrice = coin.price;
+
+        if (bithumbPrice) {
+          const koreanPrice = bithumbPrice;
+          const usdPrice = binancePrice * usdtToKrwRateRef.current;
+          const kimchiPremium = ((koreanPrice - usdPrice) / usdPrice) * 100;
+
+          updatedCoins.set(symbol, {
+            ...coin,
+            koreanPrice: koreanPrice,
+            kimchiPremium: kimchiPremium,
+          });
+        }
+      });
+      setCoins(updatedCoins);
+    }, 500);
 
     // WebSocket으로 개별 코인 업데이트 받기
     const streams = majorCoins
@@ -129,63 +253,66 @@ export default function MainPage() {
 
     ws.onmessage = (event) => {
       try {
-        const message = JSON.parse(event.data);
+        const message = JSON.parse(event.data) as {
+          data: BinanceWebSocketTicker;
+        };
         const ticker = message.data;
+        // console.log(ticker.s === "DOGEUSDT" ? parseFloat(ticker.c) : null);
 
-        // 해당 코인만 업데이트
-        setCoins((prevCoins) => {
-          const updatedCoins = new Map(prevCoins);
-          const symbol = ticker.s.replace("USDT", "");
+        // ref에만 업데이트 (리렌더링 없음)
+        const symbol = ticker.s.replace("USDT", "");
+        const price = parseFloat(ticker.c);
+        const prevPrice = prevPricesRef.current.get(symbol);
 
-          const price = parseFloat(ticker.c);
-          const prevPrice = prevPricesRef.current.get(symbol);
-
-          // 가격 변동 감지 및 깜빡임 효과
-          if (prevPrice !== undefined && prevPrice !== price) {
-            const direction = price > prevPrice ? "up" : "down";
-            setPriceFlash((prev) => {
-              const newFlash = new Map(prev);
-              newFlash.set(symbol, direction);
-              return newFlash;
-            });
-
-            // 500ms 후 깜빡임 효과 제거
-            setTimeout(() => {
-              setPriceFlash((prev) => {
-                const newFlash = new Map(prev);
-                newFlash.set(symbol, null);
-                return newFlash;
-              });
-            }, 500);
-          }
-
-          prevPricesRef.current.set(symbol, price);
-
-          const priceChange = parseFloat(ticker.P);
-          const priceChangePercent = parseFloat(ticker.P);
-          const high24h = parseFloat(ticker.h);
-          const low24h = parseFloat(ticker.l);
-          const volume24h = parseFloat(ticker.v);
-
-          const koreanPrice = price * usdtToKrwRate;
-          // 김프 계산: 실제로는 한국 거래소 가격을 가져와서 비교해야 함
-          // 현재는 예시로 0%로 설정 (한국 거래소 API 연동 필요)
-          const kimchiPremium = 0;
-
-          updatedCoins.set(symbol, {
-            symbol: symbol,
-            name: coinMap[ticker.s] || symbol,
-            price: price,
-            priceChange: priceChange,
-            priceChangePercent: priceChangePercent,
-            high24h: high24h,
-            low24h: low24h,
-            volume24h: volume24h,
-            koreanPrice: koreanPrice,
-            kimchiPremium: kimchiPremium,
+        // 가격 변동 감지 및 깜빡임 효과
+        if (prevPrice !== undefined && prevPrice !== price) {
+          const direction = price > prevPrice ? "up" : "down";
+          setPriceFlash((prev) => {
+            const newFlash = new Map(prev);
+            newFlash.set(symbol, direction);
+            return newFlash;
           });
 
-          return updatedCoins;
+          // 500ms 후 깜빡임 효과 제거
+          setTimeout(() => {
+            setPriceFlash((prev) => {
+              const newFlash = new Map(prev);
+              newFlash.set(symbol, null);
+              return newFlash;
+            });
+          }, 500);
+        }
+
+        prevPricesRef.current.set(symbol, price);
+
+        const priceChange = parseFloat(ticker.P);
+        const priceChangePercent = parseFloat(ticker.P);
+        const high24h = parseFloat(ticker.h);
+        const low24h = parseFloat(ticker.l);
+        const volume24h = parseFloat(ticker.v);
+
+        // 빗썸 가격이 있으면 사용, 없으면 환율로 계산
+        const bithumbPrice = bithumbPricesRef.current.get(symbol);
+        const koreanPrice = bithumbPrice || price * usdtToKrwRateRef.current;
+
+        // 김프 계산
+        const usdPrice = price * usdtToKrwRateRef.current;
+        const kimchiPremium = bithumbPrice
+          ? ((bithumbPrice - usdPrice) / usdPrice) * 100
+          : 0;
+
+        // ref에만 업데이트
+        coinsRef.current.set(symbol, {
+          symbol: symbol,
+          name: coinMap[ticker.s] || symbol,
+          price: price,
+          priceChange: priceChange,
+          priceChangePercent: priceChangePercent,
+          high24h: high24h,
+          low24h: low24h,
+          volume24h: volume24h,
+          koreanPrice: koreanPrice,
+          kimchiPremium: kimchiPremium,
         });
       } catch (error) {
         console.error("Error parsing WebSocket data:", error);
@@ -201,6 +328,8 @@ export default function MainPage() {
     };
 
     return () => {
+      clearInterval(updateInterval);
+      clearInterval(bithumbInterval);
       ws.close();
     };
   }, []);
@@ -216,10 +345,11 @@ export default function MainPage() {
   );
 
   const formatPrice = (price: number) => {
-    if (price >= 1000000) {
-      return price.toLocaleString("ko-KR");
-    }
-    return price.toFixed(2);
+    // 모든 가격에 콤마 포맷팅 적용
+    return price.toLocaleString("ko-KR", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    });
   };
 
   const formatVolume = (volume: number) => {
@@ -353,7 +483,7 @@ export default function MainPage() {
                     <td className="text-right py-3 px-4 overflow-hidden">
                       <div className="truncate">
                         <div
-                          className={`truncate ${
+                          className={`flex items-center justify-between ${
                             priceFlash.get(coin.symbol) === "up"
                               ? "animate-flash-green"
                               : priceFlash.get(coin.symbol) === "down"
@@ -361,26 +491,43 @@ export default function MainPage() {
                               : ""
                           }`}
                         >
-                          {formatPrice(coin.koreanPrice || coin.price)}
+                          {coin.koreanPrice ? (
+                            <>
+                              <span className="text-xs text-gray-500">KR</span>
+                              <span>{formatPrice(coin.koreanPrice)}</span>
+                            </>
+                          ) : (
+                            <span>-</span>
+                          )}
                         </div>
-                        {coin.koreanPrice && (
-                          <div className="text-sm text-gray-400 truncate">
-                            {formatPrice(coin.price)}
-                          </div>
-                        )}
+                        <div
+                          className={`flex items-center justify-between text-sm text-gray-400 ${
+                            priceFlash.get(coin.symbol) === "up"
+                              ? "animate-flash-green"
+                              : priceFlash.get(coin.symbol) === "down"
+                              ? "animate-flash-red"
+                              : ""
+                          }`}
+                        >
+                          <span className="text-xs text-gray-500">GLOBAL</span>
+                          <span>
+                            {formatPrice(coin.price * usdtToKrwRateRef.current)}
+                          </span>
+                        </div>
                       </div>
                     </td>
                     <td className="text-right py-3 px-4 overflow-hidden">
                       <div
                         className={`truncate ${
-                          coin.kimchiPremium && coin.kimchiPremium > 0
+                          coin.kimchiPremium !== undefined &&
+                          coin.kimchiPremium >= 0
                             ? "text-green-400"
                             : "text-red-400"
                         }`}
                       >
                         {coin.kimchiPremium !== undefined
                           ? `${
-                              coin.kimchiPremium > 0 ? "+" : ""
+                              coin.kimchiPremium >= 0 ? "+" : ""
                             }${coin.kimchiPremium.toFixed(2)}%`
                           : "-"}
                       </div>
@@ -406,7 +553,7 @@ export default function MainPage() {
                     <td className="text-right py-3 px-4 overflow-hidden">
                       <div
                         className={`truncate ${
-                          highDiff >= -1 ? "text-green-400" : "text-red-400"
+                          highDiff >= 0 ? "text-green-400" : "text-red-400"
                         }`}
                       >
                         <div className="truncate">
@@ -421,7 +568,7 @@ export default function MainPage() {
                     <td className="text-right py-3 px-4 overflow-hidden">
                       <div
                         className={`truncate ${
-                          lowDiff <= 1 ? "text-green-400" : "text-red-400"
+                          lowDiff >= 0 ? "text-green-400" : "text-red-400"
                         }`}
                       >
                         <div className="truncate">
