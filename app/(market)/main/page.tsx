@@ -60,11 +60,117 @@ interface UpbitTicker {
   change_rate: number;
 }
 
+// 상수 정의 (컴포넌트 외부)
+const coinMap: { [key: string]: string } = {
+  BTCUSDT: "비트코인",
+  ETHUSDT: "이더리움",
+  XRPUSDT: "엑스알피 [리플]",
+  SOLUSDT: "솔라나",
+  BNBUSDT: "바이낸스코인",
+  ADAUSDT: "에이다",
+  DOGEUSDT: "도지코인",
+  DOTUSDT: "폴카닷",
+  AVAXUSDT: "아발란체",
+};
+
+const majorCoins = [
+  "BTCUSDT",
+  "ETHUSDT",
+  "XRPUSDT",
+  "SOLUSDT",
+  "BNBUSDT",
+  "ADAUSDT",
+  "DOGEUSDT",
+  "DOTUSDT",
+  "AVAXUSDT",
+];
+
+// Binance 심볼 -> 한국 거래소 심볼 매핑
+const exchangeSymbolMap: {
+  [key: string]: { [exchange: string]: string };
+} = {
+  BTCUSDT: { 빗썸: "BTC", 업비트: "KRW-BTC" },
+  ETHUSDT: { 빗썸: "ETH", 업비트: "KRW-ETH" },
+  XRPUSDT: { 빗썸: "XRP", 업비트: "KRW-XRP" },
+  SOLUSDT: { 빗썸: "SOL", 업비트: "KRW-SOL" },
+  BNBUSDT: { 빗썸: "BNB", 업비트: "KRW-BNB" },
+  ADAUSDT: { 빗썸: "ADA", 업비트: "KRW-ADA" },
+  DOGEUSDT: { 빗썸: "DOGE", 업비트: "KRW-DOGE" },
+  DOTUSDT: { 빗썸: "DOT", 업비트: "KRW-DOT" },
+  AVAXUSDT: { 빗썸: "AVAX", 업비트: "KRW-AVAX" },
+};
+
+// 테이블 헤더 정의
+const tableHeaders = [
+  { label: "이름", align: "left" as const },
+  { label: "현재가", align: "right" as const },
+  { label: "김프", align: "right" as const },
+  { label: "전일대비", align: "right" as const },
+  { label: "고가대비(전일)", align: "right" as const },
+  { label: "저가대비(전일)", align: "right" as const },
+  { label: "거래액(일)", align: "right" as const },
+];
+
+// 유틸리티 함수들
+const MIN_LOADING_DISPLAY_TIME = 200; // 최소 로딩 표시 시간 (ms)
+
+/**
+ * 가격 변동 감지 및 깜빡임 효과 설정
+ */
+const handlePriceChange = (
+  symbol: string,
+  newPrice: number,
+  prevPrice: number | undefined,
+  setPriceFlash: React.Dispatch<
+    React.SetStateAction<Map<string, "up" | "down" | null>>
+  >
+) => {
+  if (prevPrice !== undefined && prevPrice !== newPrice) {
+    const direction = newPrice > prevPrice ? "up" : "down";
+    setPriceFlash((prev) => {
+      const newFlash = new Map(prev);
+      newFlash.set(symbol, direction);
+      return newFlash;
+    });
+
+    setTimeout(() => {
+      setPriceFlash((prev) => {
+        const newFlash = new Map(prev);
+        newFlash.set(symbol, null);
+        return newFlash;
+      });
+    }, 500);
+  }
+};
+
+/**
+ * 최소 시간 후 로딩 숨기기
+ */
+const hideLoadingAfterMinTime = (
+  startTimeRef: React.MutableRefObject<number | null>,
+  setShowLoading: React.Dispatch<React.SetStateAction<boolean>>
+) => {
+  const elapsed = Date.now() - (startTimeRef.current || 0);
+  const remaining = Math.max(0, MIN_LOADING_DISPLAY_TIME - elapsed);
+  setTimeout(() => {
+    setShowLoading(false);
+  }, remaining);
+};
+
+/**
+ * 김프 계산
+ */
+const calculateKimchiPremium = (
+  koreanPrice: number,
+  globalPrice: number
+): number => {
+  return ((koreanPrice - globalPrice) / globalPrice) * 100;
+};
+
 export default function MainPage() {
   const [coins, setCoins] = useState<Map<string, CoinData>>(new Map());
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedExchange, setSelectedExchange] = useState<string>("빗썸 KRW");
-  const [selectedMarket, setSelectedMarket] = useState("바이낸스 USDT 마켓");
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const exchangeLoadingStartTimeRef = useRef<number | null>(null);
   const [showExchangeLoading, setShowExchangeLoading] = useState(false);
@@ -72,9 +178,7 @@ export default function MainPage() {
     Map<string, "up" | "down" | null>
   >(new Map());
   const prevPricesRef = useRef<Map<string, number>>(new Map());
-  // WebSocket 데이터를 ref에 누적
   const coinsRef = useRef<Map<string, CoinData>>(new Map());
-  // 한국 거래소 데이터를 ref에 누적 (심볼 -> 가격 매핑)
   const koreanExchangePricesRef = useRef<Map<string, number>>(new Map());
 
   // 환율 변경 콜백 메모이제이션
@@ -94,45 +198,6 @@ export default function MainPage() {
 
   // 실시간 환율 가져오기 (10초 마다 업데이트, useRef 사용)
   const usdtToKrwRateRef = useExchangeRate(10 * 1000, 1400, handleRateChange);
-
-  const coinMap: { [key: string]: string } = {
-    BTCUSDT: "비트코인",
-    ETHUSDT: "이더리움",
-    XRPUSDT: "엑스알피 [리플]",
-    SOLUSDT: "솔라나",
-    BNBUSDT: "바이낸스코인",
-    ADAUSDT: "에이다",
-    DOGEUSDT: "도지코인",
-    DOTUSDT: "폴카닷",
-    AVAXUSDT: "아발란체",
-  };
-
-  // Binance 심볼 -> 한국 거래소 심볼 매핑
-  const exchangeSymbolMap: {
-    [key: string]: { [exchange: string]: string };
-  } = {
-    BTCUSDT: { 빗썸: "BTC", 업비트: "KRW-BTC" },
-    ETHUSDT: { 빗썸: "ETH", 업비트: "KRW-ETH" },
-    XRPUSDT: { 빗썸: "XRP", 업비트: "KRW-XRP" },
-    SOLUSDT: { 빗썸: "SOL", 업비트: "KRW-SOL" },
-    BNBUSDT: { 빗썸: "BNB", 업비트: "KRW-BNB" },
-    ADAUSDT: { 빗썸: "ADA", 업비트: "KRW-ADA" },
-    DOGEUSDT: { 빗썸: "DOGE", 업비트: "KRW-DOGE" },
-    DOTUSDT: { 빗썸: "DOT", 업비트: "KRW-DOT" },
-    AVAXUSDT: { 빗썸: "AVAX", 업비트: "KRW-AVAX" },
-  };
-
-  const majorCoins = [
-    "BTCUSDT",
-    "ETHUSDT",
-    "XRPUSDT",
-    "SOLUSDT",
-    "BNBUSDT",
-    "ADAUSDT",
-    "DOGEUSDT",
-    "DOTUSDT",
-    "AVAXUSDT",
-  ];
 
   // Binance WebSocket은 항상 연결 유지
   useEffect(() => {
@@ -159,26 +224,9 @@ export default function MainPage() {
         const prevPrice = prevPricesRef.current.get(symbol);
 
         // 가격 변동 감지 및 깜빡임 효과
-        if (prevPrice !== undefined && prevPrice !== price) {
-          const direction = price > prevPrice ? "up" : "down";
-          setPriceFlash((prev) => {
-            const newFlash = new Map(prev);
-            newFlash.set(symbol, direction);
-            return newFlash;
-          });
-
-          setTimeout(() => {
-            setPriceFlash((prev) => {
-              const newFlash = new Map(prev);
-              newFlash.set(symbol, null);
-              return newFlash;
-            });
-          }, 500);
-        }
-
+        handlePriceChange(symbol, price, prevPrice, setPriceFlash);
         prevPricesRef.current.set(symbol, price);
 
-        const priceChange = parseFloat(ticker.P);
         const priceChangePercent = parseFloat(ticker.P);
         const high24h = parseFloat(ticker.h);
         const low24h = parseFloat(ticker.l);
@@ -189,17 +237,17 @@ export default function MainPage() {
           price * usdtToKrwRateRef.current;
 
         const usdPrice = price * usdtToKrwRateRef.current;
-        const kimchiPremium = koreanExchangePricesRef.current.get(symbol)
-          ? ((koreanExchangePricesRef.current.get(symbol)! - usdPrice) /
-              usdPrice) *
-            100
+        const koreanPriceForKimchi =
+          koreanExchangePricesRef.current.get(symbol);
+        const kimchiPremium = koreanPriceForKimchi
+          ? calculateKimchiPremium(koreanPriceForKimchi, usdPrice)
           : 0;
 
         coinsRef.current.set(symbol, {
           symbol: symbol,
           name: coinMap[ticker.s] || symbol,
           price: price,
-          priceChange: priceChange,
+          priceChange: price * (priceChangePercent / 100), // 실제 가격 변동액 계산
           priceChangePercent: priceChangePercent,
           high24h: high24h,
           low24h: low24h,
@@ -223,7 +271,7 @@ export default function MainPage() {
     return () => {
       ws.close();
     };
-  }, []);
+  }, [usdtToKrwRateRef]);
 
   // 초기 데이터 로드
   useEffect(() => {
@@ -305,7 +353,7 @@ export default function MainPage() {
           // 김프 계산
           const usdPrice = price * usdtToKrwRateRef.current;
           const kimchiPremium = bithumbTicker
-            ? ((koreanPrice - usdPrice) / usdPrice) * 100
+            ? calculateKimchiPremium(koreanPrice, usdPrice)
             : 0;
 
           initialCoins.set(symbol, {
@@ -332,7 +380,7 @@ export default function MainPage() {
     };
 
     fetchInitialData();
-  }, []);
+  }, [usdtToKrwRateRef]);
 
   // 거래소별 WebSocket 연결 및 데이터 업데이트
   useEffect(() => {
@@ -352,13 +400,10 @@ export default function MainPage() {
 
           koreanWs.onopen = () => {
             console.log("Upbit WebSocket connected");
-            // 최소 0.2초 후에 로딩 숨기기
-            const elapsed =
-              Date.now() - (exchangeLoadingStartTimeRef.current || 0);
-            const remaining = Math.max(0, 200 - elapsed);
-            setTimeout(() => {
-              setShowExchangeLoading(false);
-            }, remaining);
+            hideLoadingAfterMinTime(
+              exchangeLoadingStartTimeRef,
+              setShowExchangeLoading
+            );
 
             const markets = Object.values(exchangeSymbolMap)
               .map((map) => map["업비트"])
@@ -394,23 +439,12 @@ export default function MainPage() {
                           const prevPrice =
                             koreanExchangePricesRef.current.get(symbol);
 
-                          if (prevPrice !== undefined && prevPrice !== price) {
-                            const direction = price > prevPrice ? "up" : "down";
-                            setPriceFlash((prev) => {
-                              const newFlash = new Map(prev);
-                              newFlash.set(symbol, direction);
-                              return newFlash;
-                            });
-
-                            setTimeout(() => {
-                              setPriceFlash((prev) => {
-                                const newFlash = new Map(prev);
-                                newFlash.set(symbol, null);
-                                return newFlash;
-                              });
-                            }, 500);
-                          }
-
+                          handlePriceChange(
+                            symbol,
+                            price,
+                            prevPrice,
+                            setPriceFlash
+                          );
                           koreanExchangePricesRef.current.set(symbol, price);
                         }
                       }
@@ -428,13 +462,10 @@ export default function MainPage() {
 
           koreanWs.onerror = (error) => {
             console.error("Upbit WebSocket error:", error);
-            // 최소 0.2초 후에 로딩 숨기기
-            const elapsed =
-              Date.now() - (exchangeLoadingStartTimeRef.current || 0);
-            const remaining = Math.max(0, 200 - elapsed);
-            setTimeout(() => {
-              setShowExchangeLoading(false);
-            }, remaining);
+            hideLoadingAfterMinTime(
+              exchangeLoadingStartTimeRef,
+              setShowExchangeLoading
+            );
           };
 
           koreanWs.onclose = () => {
@@ -462,47 +493,28 @@ export default function MainPage() {
                         const prevPrice =
                           koreanExchangePricesRef.current.get(symbol);
 
-                        if (prevPrice !== undefined && prevPrice !== price) {
-                          const direction = price > prevPrice ? "up" : "down";
-                          setPriceFlash((prev) => {
-                            const newFlash = new Map(prev);
-                            newFlash.set(symbol, direction);
-                            return newFlash;
-                          });
-
-                          setTimeout(() => {
-                            setPriceFlash((prev) => {
-                              const newFlash = new Map(prev);
-                              newFlash.set(symbol, null);
-                              return newFlash;
-                            });
-                          }, 500);
-                        }
-
+                        handlePriceChange(
+                          symbol,
+                          price,
+                          prevPrice,
+                          setPriceFlash
+                        );
                         koreanExchangePricesRef.current.set(symbol, price);
                       }
                     }
                   );
-                  // 최소 0.2초 후에 로딩 숨기기
-                  const elapsed =
-                    Date.now() - (exchangeLoadingStartTimeRef.current || 0);
-                  const remaining = Math.max(0, 200 - elapsed);
-                  setTimeout(() => {
-                    setShowExchangeLoading(false);
-                    setShowExchangeLoading(false);
-                  }, remaining);
+                  hideLoadingAfterMinTime(
+                    exchangeLoadingStartTimeRef,
+                    setShowExchangeLoading
+                  );
                 }
               }
             } catch (error) {
               console.error("Error fetching Bithumb data:", error);
-              // 최소 0.2초 후에 로딩 숨기기
-              const elapsed =
-                Date.now() - (exchangeLoadingStartTimeRef.current || 0);
-              const remaining = Math.max(0, 200 - elapsed);
-              setTimeout(() => {
-                setShowExchangeLoading(false);
-                setShowExchangeLoading(false);
-              }, remaining);
+              hideLoadingAfterMinTime(
+                exchangeLoadingStartTimeRef,
+                setShowExchangeLoading
+              );
             }
           };
 
@@ -515,12 +527,10 @@ export default function MainPage() {
         }
       } catch (error) {
         console.error("Korean Exchange WebSocket 연결 실패:", error);
-        // 최소 0.2초 후에 로딩 숨기기
-        const elapsed = Date.now() - (exchangeLoadingStartTimeRef.current || 0);
-        const remaining = Math.max(0, 200 - elapsed);
-        setTimeout(() => {
-          setShowExchangeLoading(false);
-        }, remaining);
+        hideLoadingAfterMinTime(
+          exchangeLoadingStartTimeRef,
+          setShowExchangeLoading
+        );
       }
     };
 
@@ -535,7 +545,7 @@ export default function MainPage() {
 
         if (koreanPrice) {
           const usdPrice = binancePrice * usdtToKrwRateRef.current;
-          const kimchiPremium = ((koreanPrice - usdPrice) / usdPrice) * 100;
+          const kimchiPremium = calculateKimchiPremium(koreanPrice, usdPrice);
 
           updatedCoins.set(symbol, {
             ...coin,
@@ -555,7 +565,7 @@ export default function MainPage() {
         koreanWs.close();
       }
     };
-  }, [selectedExchange]);
+  }, [selectedExchange, usdtToKrwRateRef]);
 
   const coinsArray = Array.from(coins.values()).sort(
     (a, b) => b.volume24h - a.volume24h
@@ -606,22 +616,6 @@ export default function MainPage() {
                   <option value="업비트 KRW">업비트 KRW</option>
                 </select>
               </div>
-
-              <div className="text-gray-500">⇄</div>
-
-              <div className="flex items-center space-x-2">
-                <label className="text-gray-400 text-sm">
-                  바이낸스 USDT 마켓
-                </label>
-                <select
-                  value={selectedMarket}
-                  onChange={(e) => setSelectedMarket(e.target.value)}
-                  className="bg-gray-700 text-white px-3 py-1 rounded border border-gray-600"
-                >
-                  <option value="바이낸스 USDT 마켓">바이낸스 USDT 마켓</option>
-                  <option value="바이낸스 BUSD 마켓">바이낸스 BUSD 마켓</option>
-                </select>
-              </div>
             </div>
 
             <div className="flex items-center space-x-2">
@@ -667,27 +661,16 @@ export default function MainPage() {
             </colgroup>
             <thead>
               <tr className="border-b border-gray-700">
-                <th className="text-left py-3 px-4 text-gray-400 font-normal">
-                  이름
-                </th>
-                <th className="text-right py-3 px-4 text-gray-400 font-normal">
-                  현재가
-                </th>
-                <th className="text-right py-3 px-4 text-gray-400 font-normal">
-                  김프
-                </th>
-                <th className="text-right py-3 px-4 text-gray-400 font-normal">
-                  전일대비
-                </th>
-                <th className="text-right py-3 px-4 text-gray-400 font-normal">
-                  고가대비(전일)
-                </th>
-                <th className="text-right py-3 px-4 text-gray-400 font-normal">
-                  저가대비(전일)
-                </th>
-                <th className="text-right py-3 px-4 text-gray-400 font-normal">
-                  거래액(일)
-                </th>
+                {tableHeaders.map((header, index) => (
+                  <th
+                    key={index}
+                    className={`${
+                      header.align === "left" ? "text-left" : "text-right"
+                    } py-3 px-4 text-gray-400 font-normal`}
+                  >
+                    {header.label}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -785,10 +768,6 @@ export default function MainPage() {
                               {coin.priceChangePercent >= 0 ? "+" : ""}
                               {coin.priceChangePercent.toFixed(2)}%
                             </div>
-                            {/* <div className="text-sm truncate">
-                              {coin.priceChange >= 0 ? "+" : ""}
-                              {formatPrice(coin.priceChange)}
-                            </div> */}
                           </div>
                         </td>
                         <td className="text-right py-3 px-4 overflow-hidden">
@@ -801,9 +780,6 @@ export default function MainPage() {
                               {highDiff >= 0 ? "+" : ""}
                               {highDiff.toFixed(2)}%
                             </div>
-                            {/* <div className="text-sm text-gray-400 truncate">
-                              {formatPrice(coin.high24h)}
-                            </div> */}
                           </div>
                         </td>
                         <td className="text-right py-3 px-4 overflow-hidden">
@@ -816,9 +792,6 @@ export default function MainPage() {
                               {lowDiff >= 0 ? "+" : ""}
                               {lowDiff.toFixed(2)}%
                             </div>
-                            {/* <div className="text-sm text-gray-400 truncate">
-                              {formatPrice(coin.low24h)}
-                            </div> */}
                           </div>
                         </td>
                         <td className="text-right py-3 px-4 overflow-hidden">
