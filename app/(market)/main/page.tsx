@@ -785,10 +785,10 @@ export default function MainPage() {
                               {coin.priceChangePercent >= 0 ? "+" : ""}
                               {coin.priceChangePercent.toFixed(2)}%
                             </div>
-                            <div className="text-sm truncate">
+                            {/* <div className="text-sm truncate">
                               {coin.priceChange >= 0 ? "+" : ""}
                               {formatPrice(coin.priceChange)}
-                            </div>
+                            </div> */}
                           </div>
                         </td>
                         <td className="text-right py-3 px-4 overflow-hidden">
@@ -801,9 +801,9 @@ export default function MainPage() {
                               {highDiff >= 0 ? "+" : ""}
                               {highDiff.toFixed(2)}%
                             </div>
-                            <div className="text-sm text-gray-400 truncate">
+                            {/* <div className="text-sm text-gray-400 truncate">
                               {formatPrice(coin.high24h)}
-                            </div>
+                            </div> */}
                           </div>
                         </td>
                         <td className="text-right py-3 px-4 overflow-hidden">
@@ -816,9 +816,9 @@ export default function MainPage() {
                               {lowDiff >= 0 ? "+" : ""}
                               {lowDiff.toFixed(2)}%
                             </div>
-                            <div className="text-sm text-gray-400 truncate">
+                            {/* <div className="text-sm text-gray-400 truncate">
                               {formatPrice(coin.low24h)}
-                            </div>
+                            </div> */}
                           </div>
                         </td>
                         <td className="text-right py-3 px-4 overflow-hidden">
