@@ -2,38 +2,21 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useExchangeRate } from "@/hooks/useExchangeRate";
+import { useT } from "@/hooks/useT";
 import Loading from "./loading";
 
 interface CoinData {
   symbol: string;
   name: string;
-  price: number;
-  priceChange: number;
-  priceChangePercent: number;
-  high24h: number;
-  low24h: number;
-  volume24h: number;
-  koreanPrice?: number;
-  kimchiPremium?: number;
-}
+  // 국내 거래소 (기준 거래소) 데이터
+  koreanPrice?: number; // KRW 현재가
+  korp?: number;
+  domesticChangePercent?: number; // 선택 국내 거래소 기준 전일대비(%)
+  domesticChangeAmount?: number; // 선택 국내 거래소 기준 전일대비(가격차, KRW)
+  domesticTradeValueKrw?: number; // 선택 국내 거래소 기준 거래대금(24H, KRW)
 
-interface BinanceTicker24hr {
-  symbol: string;
-  lastPrice: string;
-  priceChange: string;
-  priceChangePercent: string;
-  highPrice: string;
-  lowPrice: string;
-  volume: string;
-}
-
-interface BinanceWebSocketTicker {
-  s: string; // symbol
-  c: string; // last price
-  P: string; // price change percent
-  h: string; // high price
-  l: string; // low price
-  v: string; // volume
+  // 글로벌(바이낸스 USDT) 매칭 데이터 (없으면 undefined)
+  globalPriceUsdt?: number;
 }
 
 interface BithumbTicker {
@@ -43,13 +26,17 @@ interface BithumbTicker {
   max_price: string; // 고가
   units_traded: string; // 거래량
   acc_trade_value: string; // 거래금액
+  acc_trade_value_24H?: string; // 24시간 거래금액 (API에 따라 존재)
   prev_closing_price: string; // 전일종가
   fluctate_24H: string; // 24시간 변동금액
   fluctate_rate_24H: string; // 24시간 변동률
 }
 
 interface UpbitTicker {
-  market: string;
+  // REST: market, WS: code
+  market?: string;
+  code?: string;
+  opening_price: number;
   trade_price: number;
   trade_volume: number;
   high_price: number;
@@ -58,58 +45,19 @@ interface UpbitTicker {
   change: string;
   change_price: number;
   change_rate: number;
+  signed_change_price: number;
+  signed_change_rate: number;
+  acc_trade_price: number; // UTC 0시 기준 누적 거래대금 (KST 오전 9시 리셋)
+  acc_trade_price_24h: number; // 24h 롤링
+  acc_trade_volume: number; // UTC 0시 기준 누적 거래량 (KST 오전 9시 리셋)
+  acc_trade_volume_24h: number; // 24h 롤링
 }
 
-// 상수 정의 (컴포넌트 외부)
-const coinMap: { [key: string]: string } = {
-  BTCUSDT: "비트코인",
-  ETHUSDT: "이더리움",
-  XRPUSDT: "엑스알피 [리플]",
-  SOLUSDT: "솔라나",
-  BNBUSDT: "바이낸스코인",
-  ADAUSDT: "에이다",
-  DOGEUSDT: "도지코인",
-  DOTUSDT: "폴카닷",
-  AVAXUSDT: "아발란체",
+type UpbitMarket = {
+  market: string; // e.g. KRW-BTC
+  korean_name: string;
+  english_name: string;
 };
-
-const majorCoins = [
-  "BTCUSDT",
-  "ETHUSDT",
-  "XRPUSDT",
-  "SOLUSDT",
-  "BNBUSDT",
-  "ADAUSDT",
-  "DOGEUSDT",
-  "DOTUSDT",
-  "AVAXUSDT",
-];
-
-// Binance 심볼 -> 한국 거래소 심볼 매핑
-const exchangeSymbolMap: {
-  [key: string]: { [exchange: string]: string };
-} = {
-  BTCUSDT: { 빗썸: "BTC", 업비트: "KRW-BTC" },
-  ETHUSDT: { 빗썸: "ETH", 업비트: "KRW-ETH" },
-  XRPUSDT: { 빗썸: "XRP", 업비트: "KRW-XRP" },
-  SOLUSDT: { 빗썸: "SOL", 업비트: "KRW-SOL" },
-  BNBUSDT: { 빗썸: "BNB", 업비트: "KRW-BNB" },
-  ADAUSDT: { 빗썸: "ADA", 업비트: "KRW-ADA" },
-  DOGEUSDT: { 빗썸: "DOGE", 업비트: "KRW-DOGE" },
-  DOTUSDT: { 빗썸: "DOT", 업비트: "KRW-DOT" },
-  AVAXUSDT: { 빗썸: "AVAX", 업비트: "KRW-AVAX" },
-};
-
-// 테이블 헤더 정의
-const tableHeaders = [
-  { label: "이름", align: "left" as const },
-  { label: "현재가", align: "right" as const },
-  { label: "김프", align: "right" as const },
-  { label: "전일대비", align: "right" as const },
-  { label: "고가대비(전일)", align: "right" as const },
-  { label: "저가대비(전일)", align: "right" as const },
-  { label: "거래액(일)", align: "right" as const },
-];
 
 // 유틸리티 함수들
 const MIN_LOADING_DISPLAY_TIME = 200; // 최소 로딩 표시 시간 (ms)
@@ -123,7 +71,7 @@ const handlePriceChange = (
   prevPrice: number | undefined,
   setPriceFlash: React.Dispatch<
     React.SetStateAction<Map<string, "up" | "down" | null>>
-  >
+  >,
 ) => {
   if (prevPrice !== undefined && prevPrice !== newPrice) {
     const direction = newPrice > prevPrice ? "up" : "down";
@@ -148,7 +96,7 @@ const handlePriceChange = (
  */
 const hideLoadingAfterMinTime = (
   startTimeRef: React.MutableRefObject<number | null>,
-  setShowLoading: React.Dispatch<React.SetStateAction<boolean>>
+  setShowLoading: React.Dispatch<React.SetStateAction<boolean>>,
 ) => {
   const elapsed = Date.now() - (startTimeRef.current || 0);
   const remaining = Math.max(0, MIN_LOADING_DISPLAY_TIME - elapsed);
@@ -158,378 +106,355 @@ const hideLoadingAfterMinTime = (
 };
 
 /**
- * 김프 계산
+ * KorP (Korean Premium) 계산
  */
-const calculateKimchiPremium = (
-  koreanPrice: number,
-  globalPrice: number
-): number => {
+const calculateKorP = (koreanPrice: number, globalPrice: number): number => {
   return ((koreanPrice - globalPrice) / globalPrice) * 100;
 };
 
 export default function MainPage() {
+  const t = useT();
   const [coins, setCoins] = useState<Map<string, CoinData>>(new Map());
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedExchange, setSelectedExchange] = useState<string>("빗썸 KRW");
+  const [selectedSymbol, setSelectedSymbol] = useState<string>("BTC");
+  const hasInitializedSelectedSymbolRef = useRef(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const exchangeLoadingStartTimeRef = useRef<number | null>(null);
   const [showExchangeLoading, setShowExchangeLoading] = useState(false);
+  const [isDomesticReady, setIsDomesticReady] = useState(false);
+  const isDomesticReadyRef = useRef(false);
   const [priceFlash, setPriceFlash] = useState<
     Map<string, "up" | "down" | null>
   >(new Map());
-  const prevPricesRef = useRef<Map<string, number>>(new Map());
   const coinsRef = useRef<Map<string, CoinData>>(new Map());
   const koreanExchangePricesRef = useRef<Map<string, number>>(new Map());
+  const koreanExchangeChangePercentRef = useRef<Map<string, number>>(new Map());
+  const koreanExchangeChangeAmountRef = useRef<Map<string, number>>(new Map());
+  const koreanExchangeTradeValueRef = useRef<Map<string, number>>(new Map());
+  const upbitNameMapRef = useRef<Map<string, string>>(new Map()); // symbol -> korean_name
+  const upbitMarketsRef = useRef<string[]>([]);
+  const binancePricesRef = useRef<Map<string, number>>(new Map()); // base -> usdt price
+  // listingsCount is derivable from coins.size when needed
 
   // 환율 변경 콜백 메모이제이션
-  const handleRateChange = useCallback((newRate: number) => {
-    // 환율이 변경될 때만 모든 코인의 koreanPrice 업데이트
-    setCoins((prevCoins) => {
-      const updatedCoins = new Map(prevCoins);
-      prevCoins.forEach((coin, symbol) => {
-        updatedCoins.set(symbol, {
-          ...coin,
-          koreanPrice: coin.price * newRate,
-        });
-      });
-      return updatedCoins;
-    });
+  const handleRateChange = useCallback(() => {
+    // 글로벌 환산은 렌더링 시점에 계산하므로 여기서는 no-op
   }, []);
 
   // 실시간 환율 가져오기 (10초 마다 업데이트, useRef 사용)
   const usdtToKrwRateRef = useExchangeRate(10 * 1000, 1400, handleRateChange);
 
-  // Binance WebSocket은 항상 연결 유지
+  // 기준 거래소 상장 목록 로드
   useEffect(() => {
-    const streams = majorCoins
-      .map((coin) => `${coin.toLowerCase()}@ticker`)
-      .join("/");
-    const ws = new WebSocket(
-      `wss://stream.binance.com:9443/stream?streams=${streams}`
-    );
-
-    ws.onopen = () => {
-      console.log("Binance WebSocket connected");
-    };
-
-    ws.onmessage = (event) => {
+    const loadListings = async () => {
+      setIsInitialLoading(true);
       try {
-        const message = JSON.parse(event.data) as {
-          data: BinanceWebSocketTicker;
-        };
-        const ticker = message.data;
-
-        const symbol = ticker.s.replace("USDT", "");
-        const price = parseFloat(ticker.c);
-        const prevPrice = prevPricesRef.current.get(symbol);
-
-        // 가격 변동 감지 및 깜빡임 효과
-        handlePriceChange(symbol, price, prevPrice, setPriceFlash);
-        prevPricesRef.current.set(symbol, price);
-
-        const priceChangePercent = parseFloat(ticker.P);
-        const high24h = parseFloat(ticker.h);
-        const low24h = parseFloat(ticker.l);
-        const volume24h = parseFloat(ticker.v);
-
-        const koreanPrice =
-          koreanExchangePricesRef.current.get(symbol) ||
-          price * usdtToKrwRateRef.current;
-
-        const usdPrice = price * usdtToKrwRateRef.current;
-        const koreanPriceForKimchi =
-          koreanExchangePricesRef.current.get(symbol);
-        const kimchiPremium = koreanPriceForKimchi
-          ? calculateKimchiPremium(koreanPriceForKimchi, usdPrice)
-          : 0;
-
-        coinsRef.current.set(symbol, {
-          symbol: symbol,
-          name: coinMap[ticker.s] || symbol,
-          price: price,
-          priceChange: price * (priceChangePercent / 100), // 실제 가격 변동액 계산
-          priceChangePercent: priceChangePercent,
-          high24h: high24h,
-          low24h: low24h,
-          volume24h: volume24h,
-          koreanPrice: koreanPrice,
-          kimchiPremium: kimchiPremium,
-        });
-      } catch (error) {
-        console.error("Error parsing Binance WebSocket data:", error);
-      }
-    };
-
-    ws.onerror = (error) => {
-      console.error("Binance WebSocket error:", error);
-    };
-
-    ws.onclose = () => {
-      console.log("Binance WebSocket disconnected");
-    };
-
-    return () => {
-      ws.close();
-    };
-  }, [usdtToKrwRateRef]);
-
-  // 초기 데이터 로드
-  useEffect(() => {
-    const fetchInitialData = async () => {
-      try {
-        setIsInitialLoading(true);
-
-        // Binance 데이터 가져오기
-        const promises = majorCoins.map(async (symbol) => {
-          try {
-            const response = await fetch(`/api/binance?symbol=${symbol}`);
-            if (!response.ok) {
-              throw new Error(`Failed to fetch ${symbol}`);
-            }
-            return await response.json();
-          } catch (error) {
-            console.error(`Error fetching ${symbol}:`, error);
-            return null;
-          }
-        });
-
-        // 빗썸 초기 데이터 가져오기
-        let bithumbData: { [key: string]: BithumbTicker } = {};
-        try {
-          const bithumbResponse = await fetch(
-            "https://api.bithumb.com/public/ticker/ALL_KRW"
+        const ensureUpbitNameMap = async () => {
+          if (upbitNameMapRef.current.size > 0) return;
+          const res = await fetch("/api/upbit/markets");
+          if (!res.ok) throw new Error("Failed to fetch upbit markets");
+          const markets = (await res.json()) as UpbitMarket[];
+          upbitNameMapRef.current = new Map(
+            markets.map((m) => [m.market.split("-")[1], m.korean_name]),
           );
-          if (bithumbResponse.ok) {
-            const data = await bithumbResponse.json();
-            if (data.status === "0000" && data.data) {
-              bithumbData = data.data;
-              // 빗썸 데이터를 ref에 저장
-              Object.entries(exchangeSymbolMap).forEach(
-                ([binanceSymbol, symbolMap]) => {
-                  const bithumbSymbol = symbolMap["빗썸"];
-                  const ticker = bithumbData[bithumbSymbol] as
-                    | BithumbTicker
-                    | undefined;
-                  if (ticker) {
-                    const price = parseFloat(ticker.closing_price);
-                    koreanExchangePricesRef.current.set(
-                      binanceSymbol.replace("USDT", ""),
-                      price
-                    );
-                  }
-                }
-              );
-            }
+          // 업비트 마켓 코드 목록은 업비트 기준일 때만 필요
+          if (selectedExchange === "업비트 KRW") {
+            upbitMarketsRef.current = markets.map((m) => m.market);
           }
-        } catch (error) {
-          console.error("Error fetching initial Bithumb data:", error);
+        };
+
+        // 빗썸도 한글명을 위해 업비트 마켓 목록을 "이름 사전"으로 재사용
+        await ensureUpbitNameMap();
+
+        if (selectedExchange === "업비트 KRW") {
+          // 업비트 기준: 이미 ensureUpbitNameMap()에서 name map이 채워짐.
+          // markets 목록은 다시 불러오지 않고, upbitMarketsRef.current를 사용.
+          const res = await fetch("/api/upbit/markets");
+          if (!res.ok) throw new Error("Failed to fetch upbit markets");
+          const markets = (await res.json()) as UpbitMarket[];
+          upbitMarketsRef.current = markets.map((m) => m.market);
+
+          const map = new Map<string, CoinData>();
+          for (const m of markets) {
+            const symbol = m.market.split("-")[1];
+            map.set(symbol, { symbol, name: m.korean_name });
+          }
+          coinsRef.current = map;
+          setCoins(map);
+        } else {
+          // 빗썸: ALL_KRW 티커 keys가 상장 목록 역할
+          const res = await fetch(
+            "https://api.bithumb.com/public/ticker/ALL_KRW",
+          );
+          if (!res.ok) throw new Error("Failed to fetch bithumb tickers");
+          const json = await res.json();
+          const data = (json?.data ?? {}) as Record<
+            string,
+            BithumbTicker | string
+          >;
+          const symbols = Object.keys(data).filter((k) => k !== "date");
+          const map = new Map<string, CoinData>();
+          for (const s of symbols) {
+            map.set(s, {
+              symbol: s,
+              name: upbitNameMapRef.current.get(s) ?? s,
+            });
+          }
+          coinsRef.current = map;
+          setCoins(map);
         }
 
-        const dataArray = await Promise.all(promises);
-        const initialCoins = new Map<string, CoinData>();
-
-        dataArray.forEach((ticker: BinanceTicker24hr | null) => {
-          if (!ticker) return;
-
-          const price = parseFloat(ticker.lastPrice);
-          const priceChange = parseFloat(ticker.priceChange);
-          const priceChangePercent = parseFloat(ticker.priceChangePercent);
-          const high24h = parseFloat(ticker.highPrice);
-          const low24h = parseFloat(ticker.lowPrice);
-          const volume24h = parseFloat(ticker.volume);
-
-          const symbol = ticker.symbol.replace("USDT", "");
-          prevPricesRef.current.set(symbol, price);
-
-          // 빗썸 가격 가져오기
-          const bithumbSymbol = exchangeSymbolMap[ticker.symbol]?.["빗썸"];
-          const bithumbTicker = bithumbSymbol
-            ? bithumbData[bithumbSymbol]
-            : null;
-          const koreanPrice = bithumbTicker
-            ? parseFloat(bithumbTicker.closing_price)
-            : price * usdtToKrwRateRef.current;
-
-          // 김프 계산
-          const usdPrice = price * usdtToKrwRateRef.current;
-          const kimchiPremium = bithumbTicker
-            ? calculateKimchiPremium(koreanPrice, usdPrice)
-            : 0;
-
-          initialCoins.set(symbol, {
-            symbol: symbol,
-            name: coinMap[ticker.symbol] || symbol,
-            price: price,
-            priceChange: priceChange,
-            priceChangePercent: priceChangePercent,
-            high24h: high24h,
-            low24h: low24h,
-            volume24h: volume24h,
-            koreanPrice: koreanPrice,
-            kimchiPremium: kimchiPremium,
-          });
-        });
-
-        setCoins(initialCoins);
-        coinsRef.current = new Map(initialCoins);
-        setIsInitialLoading(false);
-      } catch (error) {
-        console.error("Error fetching initial data:", error);
+        // 선택 코인 초기화
+        if (
+          !hasInitializedSelectedSymbolRef.current &&
+          coinsRef.current.size > 0
+        ) {
+          const first = coinsRef.current.keys().next().value as
+            | string
+            | undefined;
+          if (first) setSelectedSymbol(first);
+          hasInitializedSelectedSymbolRef.current = true;
+        }
+      } catch (e) {
+        console.error("Error loading listings:", e);
+      } finally {
         setIsInitialLoading(false);
       }
     };
 
-    fetchInitialData();
-  }, [usdtToKrwRateRef]);
+    loadListings();
+  }, [selectedExchange]);
+
+  // 바이낸스 글로벌 가격 맵(USDT) 주기적 갱신
+  useEffect(() => {
+    let interval: NodeJS.Timeout | null = null;
+    const fetchPrices = async () => {
+      try {
+        const res = await fetch("/api/binance/prices?quote=USDT");
+        if (!res.ok) return;
+        const json = (await res.json()) as { prices: Record<string, number> };
+        binancePricesRef.current = new Map(Object.entries(json.prices ?? {}));
+      } catch {
+        // ignore
+      }
+    };
+    fetchPrices();
+    interval = setInterval(fetchPrices, 10_000);
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, []);
 
   // 거래소별 WebSocket 연결 및 데이터 업데이트
   useEffect(() => {
     // 로딩 시작
     exchangeLoadingStartTimeRef.current = Date.now();
     setShowExchangeLoading(true);
+    setIsDomesticReady(false);
+    isDomesticReadyRef.current = false;
     koreanExchangePricesRef.current.clear();
+    koreanExchangeChangePercentRef.current.clear();
+    koreanExchangeChangeAmountRef.current.clear();
+    koreanExchangeTradeValueRef.current.clear();
 
-    let koreanWs: WebSocket | null = null;
+    // 거래소 전환 시 이전 거래소 값이 남아 보이는(stale) 현상 방지
+    // 국내 거래소 기준 필드는 즉시 초기화하고, 새 데이터 수신 후 채운다.
+    const clearedCoins = new Map(coinsRef.current);
+    clearedCoins.forEach((coin, symbol) => {
+      clearedCoins.set(symbol, {
+        ...coin,
+        koreanPrice: undefined,
+        korp: 0,
+        domesticChangePercent: undefined,
+        domesticChangeAmount: undefined,
+        domesticTradeValueKrw: undefined,
+      });
+    });
+    coinsRef.current = clearedCoins;
+    setCoins(clearedCoins);
+
+    let upbitWorker: Worker | null = null;
     let updateInterval: NodeJS.Timeout | null = null;
+    let bithumbInterval: NodeJS.Timeout | null = null;
+    let upbitFallbackInterval: NodeJS.Timeout | null = null;
+    let upbitFallbackTimeout: NodeJS.Timeout | null = null;
 
     const connectKoreanExchangeWebSocket = () => {
       try {
         if (selectedExchange === "업비트 KRW") {
-          const wsUrl = "wss://api.upbit.com/websocket/v1";
-          koreanWs = new WebSocket(wsUrl);
+          hideLoadingAfterMinTime(
+            exchangeLoadingStartTimeRef,
+            setShowExchangeLoading,
+          );
 
-          koreanWs.onopen = () => {
-            console.log("Upbit WebSocket connected");
-            hideLoadingAfterMinTime(
-              exchangeLoadingStartTimeRef,
-              setShowExchangeLoading
-            );
+          const markets = upbitMarketsRef.current.filter((m) =>
+            m.startsWith("KRW-"),
+          );
 
-            const markets = Object.values(exchangeSymbolMap)
-              .map((map) => map["업비트"])
-              .filter((market) => market.startsWith("KRW-"));
+          // WS in Web Worker
+          upbitWorker = new Worker(
+            new URL("./upbit-ticker.worker.ts", import.meta.url),
+          );
+          upbitWorker.onmessage = (ev: MessageEvent) => {
+            const msg = ev.data as
+              | {
+                  type: "tick";
+                  data: {
+                    market: string;
+                    tradePrice: number;
+                    signedChangeRate: number;
+                    signedChangePrice: number;
+                    accTradePrice24h: number;
+                  };
+                }
+              | { type: "open" | "close" | "error"; message?: string };
 
-            const subscribeMessage = JSON.stringify([
-              { ticket: "crypto-market-viewer" },
-              {
-                type: "ticker",
-                codes: markets,
-              },
-            ]);
+            if (msg.type === "tick") {
+              const marketCode = msg.data.market;
+              const symbol = marketCode.split("-")[1];
+              if (!symbol) return;
 
-            koreanWs?.send(subscribeMessage);
+              const price = msg.data.tradePrice;
+              const prevPrice = koreanExchangePricesRef.current.get(symbol);
+              handlePriceChange(symbol, price, prevPrice, setPriceFlash);
+
+              koreanExchangePricesRef.current.set(symbol, price);
+              koreanExchangeChangePercentRef.current.set(
+                symbol,
+                msg.data.signedChangeRate * 100,
+              );
+              koreanExchangeChangeAmountRef.current.set(
+                symbol,
+                msg.data.signedChangePrice,
+              );
+              koreanExchangeTradeValueRef.current.set(
+                symbol,
+                msg.data.accTradePrice24h,
+              );
+
+              setIsDomesticReady(true);
+              isDomesticReadyRef.current = true;
+            }
           };
+          upbitWorker.postMessage({ type: "start", markets });
 
-          koreanWs.onmessage = (event) => {
+          // If WS doesn't deliver quickly, fallback to server-proxied REST polling.
+          // (Some environments block/alter WS frames.)
+          const marketsParam = markets.join(",");
+          const fetchFallbackOnce = async () => {
             try {
-              if (event.data instanceof Blob) {
-                const reader = new FileReader();
-                reader.onload = () => {
-                  try {
-                    const data = JSON.parse(
-                      reader.result as string
-                    ) as UpbitTicker;
-                    const market = data.market;
-
-                    Object.entries(exchangeSymbolMap).forEach(
-                      ([binanceSymbol, symbolMap]) => {
-                        if (symbolMap["업비트"] === market) {
-                          const symbol = binanceSymbol.replace("USDT", "");
-                          const price = data.trade_price;
-                          const prevPrice =
-                            koreanExchangePricesRef.current.get(symbol);
-
-                          handlePriceChange(
-                            symbol,
-                            price,
-                            prevPrice,
-                            setPriceFlash
-                          );
-                          koreanExchangePricesRef.current.set(symbol, price);
-                        }
-                      }
-                    );
-                  } catch (error) {
-                    console.error("Error parsing Upbit WebSocket data:", error);
-                  }
-                };
-                reader.readAsText(event.data);
+              const res = await fetch(`/api/upbit?markets=${marketsParam}`);
+              if (!res.ok) return;
+              const arr = (await res.json()) as UpbitTicker[];
+              for (const item of arr) {
+                const marketCode = item.market ?? item.code;
+                if (!marketCode) continue;
+                const symbol = marketCode.split("-")[1];
+                if (!symbol) continue;
+                koreanExchangePricesRef.current.set(symbol, item.trade_price);
+                koreanExchangeChangePercentRef.current.set(
+                  symbol,
+                  item.signed_change_rate * 100,
+                );
+                koreanExchangeChangeAmountRef.current.set(
+                  symbol,
+                  item.signed_change_price,
+                );
+                koreanExchangeTradeValueRef.current.set(
+                  symbol,
+                  item.acc_trade_price_24h,
+                );
               }
-            } catch (error) {
-              console.error("Error processing Upbit WebSocket message:", error);
+              setIsDomesticReady(true);
+              isDomesticReadyRef.current = true;
+            } catch {
+              // ignore
             }
           };
 
-          koreanWs.onerror = (error) => {
-            console.error("Upbit WebSocket error:", error);
-            hideLoadingAfterMinTime(
-              exchangeLoadingStartTimeRef,
-              setShowExchangeLoading
-            );
-          };
-
-          koreanWs.onclose = () => {
-            console.log("Upbit WebSocket disconnected");
-          };
+          upbitFallbackTimeout = setTimeout(() => {
+            if (!isDomesticReadyRef.current) {
+              fetchFallbackOnce();
+              upbitFallbackInterval = setInterval(fetchFallbackOnce, 1000);
+            }
+          }, 1500);
         } else if (selectedExchange === "빗썸 KRW") {
           // 빗썸은 WebSocket이 없으므로 REST API 폴링
           const fetchBithumbData = async () => {
             try {
               const response = await fetch(
-                "https://api.bithumb.com/public/ticker/ALL_KRW"
+                "https://api.bithumb.com/public/ticker/ALL_KRW",
               );
               if (response.ok) {
                 const data = await response.json();
                 if (data.status === "0000" && data.data) {
-                  Object.entries(exchangeSymbolMap).forEach(
-                    ([binanceSymbol, symbolMap]) => {
-                      const bithumbSymbol = symbolMap["빗썸"];
-                      const ticker = data.data[bithumbSymbol] as
-                        | BithumbTicker
-                        | undefined;
-                      if (ticker) {
-                        const symbol = binanceSymbol.replace("USDT", "");
-                        const price = parseFloat(ticker.closing_price);
-                        const prevPrice =
-                          koreanExchangePricesRef.current.get(symbol);
+                  const tickers = data.data as Record<string, BithumbTicker>;
+                  for (const [symbol, ticker] of Object.entries(tickers)) {
+                    if (symbol === "date") continue;
+                    const close = parseFloat(ticker.closing_price);
+                    const prevClose = parseFloat(ticker.prev_closing_price);
+                    const prevPrice =
+                      koreanExchangePricesRef.current.get(symbol);
 
-                        handlePriceChange(
-                          symbol,
-                          price,
-                          prevPrice,
-                          setPriceFlash
-                        );
-                        koreanExchangePricesRef.current.set(symbol, price);
-                      }
+                    handlePriceChange(symbol, close, prevPrice, setPriceFlash);
+                    if (Number.isFinite(close)) {
+                      koreanExchangePricesRef.current.set(symbol, close);
                     }
-                  );
+
+                    if (
+                      Number.isFinite(close) &&
+                      Number.isFinite(prevClose) &&
+                      prevClose !== 0
+                    ) {
+                      const changeAmount = close - prevClose;
+                      const changePercent = (changeAmount / prevClose) * 100;
+                      koreanExchangeChangeAmountRef.current.set(
+                        symbol,
+                        changeAmount,
+                      );
+                      koreanExchangeChangePercentRef.current.set(
+                        symbol,
+                        changePercent,
+                      );
+                    }
+
+                    const tradeValue = parseFloat(
+                      (ticker.acc_trade_value_24H ??
+                        ticker.acc_trade_value) as string,
+                    );
+                    if (Number.isFinite(tradeValue)) {
+                      koreanExchangeTradeValueRef.current.set(
+                        symbol,
+                        tradeValue,
+                      );
+                    }
+                  }
                   hideLoadingAfterMinTime(
                     exchangeLoadingStartTimeRef,
-                    setShowExchangeLoading
+                    setShowExchangeLoading,
                   );
+                  setIsDomesticReady(true);
+                  isDomesticReadyRef.current = true;
                 }
               }
             } catch (error) {
               console.error("Error fetching Bithumb data:", error);
               hideLoadingAfterMinTime(
                 exchangeLoadingStartTimeRef,
-                setShowExchangeLoading
+                setShowExchangeLoading,
               );
             }
           };
 
           fetchBithumbData();
-          const bithumbInterval = setInterval(fetchBithumbData, 500);
-
-          return () => {
-            clearInterval(bithumbInterval);
-          };
+          bithumbInterval = setInterval(fetchBithumbData, 500);
         }
       } catch (error) {
         console.error("Korean Exchange WebSocket 연결 실패:", error);
         hideLoadingAfterMinTime(
           exchangeLoadingStartTimeRef,
-          setShowExchangeLoading
+          setShowExchangeLoading,
         );
       }
     };
@@ -541,18 +466,32 @@ export default function MainPage() {
       const updatedCoins = new Map(coinsRef.current);
       updatedCoins.forEach((coin, symbol) => {
         const koreanPrice = koreanExchangePricesRef.current.get(symbol);
-        const binancePrice = coin.price;
+        const domesticChangePercent =
+          koreanExchangeChangePercentRef.current.get(symbol);
+        const domesticChangeAmount =
+          koreanExchangeChangeAmountRef.current.get(symbol);
+        const domesticTradeValueKrw =
+          koreanExchangeTradeValueRef.current.get(symbol);
+        const globalPriceUsdt = binancePricesRef.current.get(symbol);
+        const globalKrw =
+          globalPriceUsdt !== undefined
+            ? globalPriceUsdt * usdtToKrwRateRef.current
+            : undefined;
+        const korp =
+          koreanPrice !== undefined && globalKrw !== undefined
+            ? calculateKorP(koreanPrice, globalKrw)
+            : undefined;
 
-        if (koreanPrice) {
-          const usdPrice = binancePrice * usdtToKrwRateRef.current;
-          const kimchiPremium = calculateKimchiPremium(koreanPrice, usdPrice);
-
-          updatedCoins.set(symbol, {
-            ...coin,
-            koreanPrice: koreanPrice,
-            kimchiPremium: kimchiPremium,
-          });
-        }
+        // 값이 없으면 undefined로 덮어써서 "이전 거래소 값"이 남지 않게 한다.
+        updatedCoins.set(symbol, {
+          ...coin,
+          koreanPrice: koreanPrice,
+          korp,
+          domesticChangePercent: domesticChangePercent,
+          domesticChangeAmount: domesticChangeAmount,
+          domesticTradeValueKrw: domesticTradeValueKrw,
+          globalPriceUsdt: globalPriceUsdt,
+        });
       });
       setCoins(updatedCoins);
     }, 500);
@@ -561,20 +500,32 @@ export default function MainPage() {
       if (updateInterval) {
         clearInterval(updateInterval);
       }
-      if (koreanWs) {
-        koreanWs.close();
+      if (bithumbInterval) {
+        clearInterval(bithumbInterval);
+      }
+      if (upbitFallbackInterval) {
+        clearInterval(upbitFallbackInterval);
+      }
+      if (upbitFallbackTimeout) {
+        clearTimeout(upbitFallbackTimeout);
+      }
+      if (upbitWorker) {
+        try {
+          upbitWorker.postMessage({ type: "stop" });
+        } catch {}
+        upbitWorker.terminate();
       }
     };
   }, [selectedExchange, usdtToKrwRateRef]);
 
   const coinsArray = Array.from(coins.values()).sort(
-    (a, b) => b.volume24h - a.volume24h
+    (a, b) => (b.domesticTradeValueKrw ?? 0) - (a.domesticTradeValueKrw ?? 0),
   );
 
   const filteredCoins = coinsArray.filter(
     (coin) =>
       coin.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      coin.symbol.toLowerCase().includes(searchQuery.toLowerCase())
+      coin.symbol.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
   const formatPrice = (price: number) => {
@@ -584,13 +535,9 @@ export default function MainPage() {
     });
   };
 
-  const formatVolume = (volume: number) => {
-    if (volume >= 1000000000000) {
-      return `${(volume / 1000000000000).toFixed(2)}조`;
-    } else if (volume >= 100000000) {
-      return `${(volume / 100000000).toFixed(0)}억`;
-    }
-    return volume.toLocaleString("ko-KR");
+  const formatTradeValueInMillionsKrw = (valueKrw: number) => {
+    const millions = Math.round(valueKrw / 1_000_000);
+    return `${millions.toLocaleString("ko-KR")}백만`;
   };
 
   // 첫 로딩 시에만 loading.tsx 표시
@@ -598,212 +545,284 @@ export default function MainPage() {
     return <Loading />;
   }
 
-  return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      {/* Exchange Selection Bar */}
-      <div className="bg-gray-800 border-b border-gray-700">
-        <div className="container mx-auto px-4 py-3">
-          <div className="flex items-center justify-between flex-wrap gap-4">
-            <div className="flex items-center space-x-4">
-              <div className="flex items-center space-x-2">
-                <label className="text-gray-400 text-sm">기준 거래소</label>
-                <select
-                  value={selectedExchange}
-                  onChange={(e) => setSelectedExchange(e.target.value)}
-                  className="bg-gray-700 text-white px-3 py-1 rounded border border-gray-600"
-                >
-                  <option value="빗썸 KRW">빗썸 KRW</option>
-                  <option value="업비트 KRW">업비트 KRW</option>
-                </select>
-              </div>
-            </div>
+  const selectedCoin = coins.get(selectedSymbol) ?? filteredCoins[0];
+  const selectedCoinSymbol = selectedCoin?.symbol ?? "BTC";
 
-            <div className="flex items-center space-x-2">
-              <span className="text-gray-400 text-sm">
-                암호화폐 총 {coins.size}개
-              </span>
-              <input
-                type="text"
-                placeholder="Q BTC, 비트코인"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="bg-gray-700 text-white px-4 py-2 rounded border border-gray-600 focus:outline-none focus:border-yellow-400"
-              />
-            </div>
-          </div>
+  const SkeletonRow = ({ keyProp }: { keyProp: number }) => (
+    <div
+      key={keyProp}
+      className="px-2 py-2.5 border-b border-gray-100 dark:border-gray-800"
+    >
+      <div className="grid grid-cols-[minmax(0,1fr)_52px_88px_64px_64px] gap-1.5 items-center">
+        <div className="min-w-0">
+          <div className="h-3 w-28 bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
+          <div className="mt-1 h-2.5 w-12 bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
         </div>
+        <div className="h-3 w-10 ml-auto bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
+        <div className="h-3 w-16 ml-auto bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
+        <div className="h-3 w-12 ml-auto bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
+        <div className="h-3 w-14 ml-auto bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
       </div>
+    </div>
+  );
 
-      {/* Coin Table */}
-      <div className="container mx-auto px-4 py-6">
-        <div className="overflow-x-auto relative">
-          {/* Exchange Loading Overlay */}
-          {showExchangeLoading && (
-            <div className="absolute inset-0 bg-gray-900 bg-opacity-75 backdrop-blur-sm flex items-center justify-center z-10">
-              <div className="text-center">
-                <div className="inline-block animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-yellow-400 mb-4"></div>
-                <p className="text-white text-lg">
-                  {selectedExchange.replace(" KRW", "")} 거래소 데이터 로딩
-                  중...
-                </p>
+  return (
+    <div className="h-full bg-white dark:bg-gray-900 text-gray-900 dark:text-white overflow-hidden">
+      <div className="mx-auto max-w-[1600px] px-2 py-2 h-full">
+        <div className="flex gap-2 h-full">
+          {/* Left: market list (Upbit/Bithumb-like) */}
+          <aside className="w-[440px] shrink-0 rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 overflow-hidden flex flex-col min-h-0">
+            <div className="border-b border-gray-200 dark:border-gray-800 p-2 shrink-0">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xs text-gray-600 dark:text-gray-400 shrink-0">
+                      {t("market.baseExchange")}
+                    </span>
+                    <select
+                      value={selectedExchange}
+                      onChange={(e) => setSelectedExchange(e.target.value)}
+                      className="bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white px-2 py-1 rounded border border-gray-200 dark:border-gray-700 text-xs shrink-0"
+                    >
+                      <option value="빗썸 KRW">빗썸 KRW</option>
+                      <option value="업비트 KRW">업비트 KRW</option>
+                    </select>
+                  </div>
+
+                  <div
+                    className="mt-1 text-xs text-gray-600 dark:text-gray-400 leading-tight"
+                    title={t("market.globalReferenceHint")}
+                  >
+                    <span className="text-gray-500 dark:text-gray-400">
+                      {t("market.globalReference")}
+                    </span>
+                    <span className="mx-1 text-gray-400 dark:text-gray-500">
+                      ·
+                    </span>
+                    <span className="font-medium text-gray-700 dark:text-gray-200">
+                      {t("market.binanceUsdtMarket")}
+                    </span>
+                  </div>
+                </div>
+
+                <span className="text-xs text-gray-600 dark:text-gray-400 shrink-0">
+                  {t("market.totalCoins", { count: coins.size })}
+                </span>
+              </div>
+
+              <div className="mt-2 flex items-center gap-2">
+                <div className="relative flex-1">
+                  <input
+                    type="text"
+                    placeholder={t("market.searchPlaceholder")}
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white pl-8 pr-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 focus:outline-none focus:border-yellow-400 text-sm"
+                  />
+                  <span className="absolute left-3 top-2 text-gray-400 text-sm">
+                    ⌕
+                  </span>
+                </div>
               </div>
             </div>
-          )}
-          <table className="w-full table-fixed min-w-[1200px]">
-            <colgroup>
-              <col className="w-[200px]" />
-              <col className="w-[180px]" />
-              <col className="w-[120px]" />
-              <col className="w-[150px]" />
-              <col className="w-[180px]" />
-              <col className="w-[180px]" />
-              <col className="w-[150px]" />
-            </colgroup>
-            <thead>
-              <tr className="border-b border-gray-700">
-                {tableHeaders.map((header, index) => (
-                  <th
-                    key={index}
-                    className={`${
-                      header.align === "left" ? "text-left" : "text-right"
-                    } py-3 px-4 text-gray-400 font-normal`}
-                  >
-                    {header.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {isInitialLoading
-                ? // 첫 로딩 시에만 스켈레톤 표시 (Next.js loading.tsx에서 처리)
-                  null
-                : filteredCoins.map((coin) => {
-                    const highDiff =
-                      ((coin.price - coin.high24h) / coin.high24h) * 100;
-                    const lowDiff =
-                      ((coin.price - coin.low24h) / coin.low24h) * 100;
+
+            <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col">
+              {showExchangeLoading && (
+                <div className="absolute inset-0 bg-white/75 dark:bg-gray-900/75 backdrop-blur-sm flex items-center justify-center z-10">
+                  <div className="text-center">
+                    <div className="inline-block animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-yellow-400 mb-2"></div>
+                    <p className="text-gray-900 dark:text-white text-sm">
+                      {t("market.exchangeLoading", {
+                        exchange: selectedExchange.replace(" KRW", ""),
+                      })}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-[minmax(0,1fr)_52px_88px_64px_64px] gap-1.5 px-2 py-2 text-[10px] text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-800 overflow-x-hidden">
+                <div>{t("table.name")}</div>
+                <div className="text-right">{t("table.korp")}</div>
+                <div className="text-right">{t("table.price")}</div>
+                <div className="text-right">{t("table.change24h")}</div>
+                <div className="text-right">{t("table.volume24h")}</div>
+              </div>
+
+              <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden modern-scrollbar">
+                {!isDomesticReady ? (
+                  <div>
+                    {Array.from({ length: 12 }).map((_, i) => (
+                      <SkeletonRow key={i} keyProp={i} />
+                    ))}
+                  </div>
+                ) : (
+                  filteredCoins.map((coin) => {
+                    const isSelected = coin.symbol === selectedCoinSymbol;
+                    const domPrice = coin.koreanPrice;
+                    const globalKrw =
+                      coin.globalPriceUsdt !== undefined
+                        ? coin.globalPriceUsdt * usdtToKrwRateRef.current
+                        : undefined;
 
                     return (
-                      <tr
+                      <button
                         key={coin.symbol}
-                        className="border-b border-gray-800 hover:bg-gray-800 transition-colors animate-fade-in"
+                        type="button"
+                        onClick={() => setSelectedSymbol(coin.symbol)}
+                        className={`w-full text-left px-2 py-2.5 border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors overflow-hidden ${
+                          isSelected
+                            ? "bg-yellow-50/60 dark:bg-yellow-400/10"
+                            : ""
+                        }`}
                       >
-                        <td className="py-3 px-4 overflow-hidden">
-                          <div className="truncate">
-                            <div className="font-medium truncate">
+                        <div className="grid grid-cols-[minmax(0,1fr)_52px_88px_64px_64px] gap-1.5 items-center">
+                          <div className="min-w-0 text-left">
+                            <div className="text-[13px] font-medium whitespace-normal break-words leading-snug">
                               {coin.name}
                             </div>
-                            <div className="text-sm text-gray-400 truncate">
+                            <div className="text-[11px] text-gray-500 dark:text-gray-400 truncate">
                               {coin.symbol}
                             </div>
                           </div>
-                        </td>
-                        <td className="text-right py-3 px-4 overflow-hidden">
-                          <div className="truncate">
-                            <div
-                              className={`flex items-center justify-between ${
-                                priceFlash.get(coin.symbol) === "up"
-                                  ? "animate-flash-green"
-                                  : priceFlash.get(coin.symbol) === "down"
+
+                          <div className="text-right tabular-nums">
+                            {coin.korp !== undefined ? (
+                              <div>
+                                <div
+                                  className={`text-[13px] font-semibold ${
+                                    coin.korp >= 0
+                                      ? "text-green-600 dark:text-green-400"
+                                      : "text-red-600 dark:text-red-400"
+                                  }`}
+                                >
+                                  {coin.korp >= 0 ? "+" : ""}
+                                  {coin.korp.toFixed(2)}%
+                                </div>
+                                <div className="text-[10px] text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                                  {coin.koreanPrice !== undefined &&
+                                  globalKrw !== undefined ? (
+                                    (() => {
+                                      const diff = coin.koreanPrice - globalKrw;
+                                      return `${diff >= 0 ? "+" : "-"}${formatPrice(
+                                        Math.abs(diff),
+                                      )}`;
+                                    })()
+                                  ) : (
+                                    <span>-</span>
+                                  )}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="text-[13px] font-semibold text-gray-500 dark:text-gray-400">
+                                -
+                              </div>
+                            )}
+                          </div>
+
+                          <div
+                            className={`text-right tabular-nums ${
+                              priceFlash.get(coin.symbol) === "up"
+                                ? "animate-flash-green"
+                                : priceFlash.get(coin.symbol) === "down"
                                   ? "animate-flash-red"
                                   : ""
-                              }`}
-                            >
-                              {coin.koreanPrice ? (
-                                <>
-                                  <span className="text-xs text-gray-500">
-                                    {selectedExchange.replace(" KRW", "")}
-                                  </span>
-                                  <span>{formatPrice(coin.koreanPrice)}</span>
-                                </>
-                              ) : (
-                                <span>-</span>
-                              )}
-                            </div>
-                            <div
-                              className={`flex items-center justify-between text-sm text-gray-400 ${
-                                priceFlash.get(coin.symbol) === "up"
-                                  ? "animate-flash-green"
-                                  : priceFlash.get(coin.symbol) === "down"
-                                  ? "animate-flash-red"
-                                  : ""
-                              }`}
-                            >
-                              <span className="text-xs text-gray-500">
-                                GLOBAL
-                              </span>
-                              <span>
-                                {formatPrice(
-                                  coin.price * usdtToKrwRateRef.current
-                                )}
-                              </span>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="text-right py-3 px-4 overflow-hidden">
-                          <div
-                            className={`truncate ${
-                              coin.kimchiPremium !== undefined &&
-                              coin.kimchiPremium >= 0
-                                ? "text-green-400"
-                                : "text-red-400"
                             }`}
                           >
-                            {coin.kimchiPremium !== undefined
-                              ? `${
-                                  coin.kimchiPremium >= 0 ? "+" : ""
-                                }${coin.kimchiPremium.toFixed(2)}%`
-                              : "-"}
-                          </div>
-                        </td>
-                        <td className="text-right py-3 px-4 overflow-hidden">
-                          <div
-                            className={`truncate ${
-                              coin.priceChangePercent >= 0
-                                ? "text-green-400"
-                                : "text-red-400"
-                            }`}
-                          >
-                            <div className="truncate">
-                              {coin.priceChangePercent >= 0 ? "+" : ""}
-                              {coin.priceChangePercent.toFixed(2)}%
+                            <div className="text-[13px] font-semibold">
+                              {domPrice ? formatPrice(domPrice) : "-"}
+                            </div>
+                            <div className="text-[10px] text-gray-500 dark:text-gray-400 truncate">
+                              {globalKrw !== undefined
+                                ? formatPrice(globalKrw)
+                                : "-"}
                             </div>
                           </div>
-                        </td>
-                        <td className="text-right py-3 px-4 overflow-hidden">
+
                           <div
-                            className={`truncate ${
-                              highDiff >= 0 ? "text-green-400" : "text-red-400"
+                            className={`text-right tabular-nums font-semibold ${
+                              (coin.domesticChangePercent ?? 0) >= 0
+                                ? "text-green-600 dark:text-green-400"
+                                : "text-red-600 dark:text-red-400"
                             }`}
                           >
-                            <div className="truncate">
-                              {highDiff >= 0 ? "+" : ""}
-                              {highDiff.toFixed(2)}%
+                            <div className="text-[13px]">
+                              {coin.domesticChangePercent !== undefined
+                                ? `${coin.domesticChangePercent >= 0 ? "+" : ""}${coin.domesticChangePercent.toFixed(2)}%`
+                                : "-"}
+                            </div>
+                            <div className="text-[10px] text-gray-500 dark:text-gray-400 truncate">
+                              {coin.domesticChangeAmount !== undefined
+                                ? `${coin.domesticChangeAmount >= 0 ? "+" : "-"}${formatPrice(
+                                    Math.abs(coin.domesticChangeAmount),
+                                  )}`
+                                : "-"}
                             </div>
                           </div>
-                        </td>
-                        <td className="text-right py-3 px-4 overflow-hidden">
-                          <div
-                            className={`truncate ${
-                              lowDiff >= 0 ? "text-green-400" : "text-red-400"
-                            }`}
-                          >
-                            <div className="truncate">
-                              {lowDiff >= 0 ? "+" : ""}
-                              {lowDiff.toFixed(2)}%
+
+                          <div className="text-right tabular-nums">
+                            <div className="text-[13px] font-semibold whitespace-nowrap">
+                              {coin.domesticTradeValueKrw !== undefined
+                                ? formatTradeValueInMillionsKrw(
+                                    coin.domesticTradeValueKrw,
+                                  )
+                                : "-"}
                             </div>
                           </div>
-                        </td>
-                        <td className="text-right py-3 px-4 overflow-hidden">
-                          <div className="truncate">
-                            {formatVolume(coin.volume24h)}
-                          </div>
-                        </td>
-                      </tr>
+                        </div>
+                      </button>
                     );
-                  })}
-            </tbody>
-          </table>
+                  })
+                )}
+              </div>
+            </div>
+          </aside>
+
+          {/* Right: chart area placeholder */}
+          <main className="flex-1 min-w-0 min-h-0">
+            <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 overflow-hidden h-full flex flex-col min-h-0">
+              <div className="border-b border-gray-200 dark:border-gray-800 px-4 py-3 flex items-center justify-between gap-4 shrink-0">
+                <div className="min-w-0">
+                  <div className="font-semibold truncate">
+                    {selectedCoin?.name ?? selectedCoinSymbol}
+                  </div>
+                  <div className="text-sm text-gray-600 dark:text-gray-400 truncate">
+                    {selectedCoinSymbol}/KRW · {t("market.binanceUsdtMarket")}{" "}
+                    KRW 환산
+                  </div>
+                </div>
+                <div className="text-right tabular-nums">
+                  <div className="text-sm text-gray-600 dark:text-gray-400">
+                    {selectedExchange.replace(" KRW", "")} / GLOBAL
+                  </div>
+                  <div className="font-semibold">
+                    {selectedCoin?.koreanPrice
+                      ? formatPrice(selectedCoin.koreanPrice)
+                      : "-"}{" "}
+                    <span className="text-gray-500 dark:text-gray-400">·</span>{" "}
+                    {selectedCoin?.globalPriceUsdt !== undefined
+                      ? formatPrice(
+                          selectedCoin.globalPriceUsdt *
+                            usdtToKrwRateRef.current,
+                        )
+                      : "-"}
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-4 flex-1 min-h-0">
+                <div className="h-full rounded-xl border border-dashed border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 flex items-center justify-center">
+                  <div className="text-center">
+                    <div className="text-gray-700 dark:text-gray-200 font-medium">
+                      {t("chart.placeholderTitle")}
+                    </div>
+                    <div className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                      {t("chart.placeholderSubtitle")}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </main>
         </div>
       </div>
     </div>
