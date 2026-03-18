@@ -12,6 +12,10 @@ export type TranslationKey =
   | "market.totalCoins"
   | "market.searchPlaceholder"
   | "market.exchangeLoading"
+  | "market.connectionPending"
+  | "market.connectionFailed"
+  | "market.retryConnect"
+  | "market.staleDataHidden"
   | "table.name"
   | "table.price"
   | "table.korp"
@@ -37,6 +41,10 @@ export const translations: Record<Locale, Record<TranslationKey, string>> = {
     "market.totalCoins": "암호화폐 총 {count}개",
     "market.searchPlaceholder": "Q BTC, 비트코인",
     "market.exchangeLoading": "{exchange} 거래소 데이터 로딩 중...",
+    "market.connectionPending": "연결 준비 중…",
+    "market.connectionFailed": "연결이 원활하지 않아요.",
+    "market.retryConnect": "재연결",
+    "market.staleDataHidden": "이전 데이터는 숨겼어요. 재연결 후 표시됩니다.",
     "table.name": "이름",
     "table.price": "현재가",
     "table.korp": "KorP",
@@ -62,6 +70,10 @@ export const translations: Record<Locale, Record<TranslationKey, string>> = {
     "market.totalCoins": "Total coins: {count}",
     "market.searchPlaceholder": "Search: BTC, Bitcoin",
     "market.exchangeLoading": "Loading {exchange} market data...",
+    "market.connectionPending": "Connecting…",
+    "market.connectionFailed": "Connection is unstable.",
+    "market.retryConnect": "Reconnect",
+    "market.staleDataHidden": "Previous data is hidden until reconnection.",
     "table.name": "Name",
     "table.price": "Price",
     "table.korp": "KorP",
