@@ -65,6 +65,13 @@ const seqBySymbol = new Map<string, number>();
 const MAX_RETRIES = 5;
 const BASE_DELAY_MS = 400;
 const MAX_DELAY_MS = 8000;
+const SUBSCRIBE_CHUNK_SIZE = 100;
+
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
 
 function send(msg: OutMessage) {
   (self as unknown as Worker).postMessage(msg);
@@ -120,7 +127,18 @@ function connect() {
     send({ type: "open" });
     try {
       const markets = symbols.map((s) => `${s}_KRW`);
-      ws?.send(JSON.stringify({ type: "ticker", symbols: markets }));
+      // Bithumb public WS commonly requires tickTypes for ticker stream.
+      // Bithumb WS may close if subscribing too many symbols at once.
+      const chunks = chunk(markets, SUBSCRIBE_CHUNK_SIZE);
+      for (const symbolsChunk of chunks) {
+        ws?.send(
+          JSON.stringify({
+            type: "ticker",
+            symbols: symbolsChunk,
+            tickTypes: ["24H"],
+          }),
+        );
+      }
     } catch {
       // ignore
     }
@@ -144,7 +162,21 @@ function connect() {
     send({ type: "error", message: "Bithumb WS error" });
   };
 
-  ws.onclose = () => {
+  ws.onclose = (ev) => {
+    const code =
+      ev && typeof (ev as CloseEvent).code === "number"
+        ? (ev as CloseEvent).code
+        : undefined;
+    const reason =
+      ev && typeof (ev as CloseEvent).reason === "string"
+        ? (ev as CloseEvent).reason
+        : undefined;
+    if (code !== undefined || reason) {
+      send({
+        type: "error",
+        message: `Bithumb WS closed (code=${code ?? "?"}, reason=${reason ?? ""})`,
+      });
+    }
     send({ type: "close" });
     scheduleReconnect();
   };
@@ -181,7 +213,15 @@ function parseAndEmit(text: string) {
     if ("status" in payload && typeof payload.status === "string") {
       // subscription ack/error
       if (payload.status !== "0000") {
-        send({ type: "error", message: payload.resmsg ?? "Bithumb WS error" });
+        send({
+          type: "error",
+          message:
+            payload.resmsg ??
+            `Bithumb WS subscription error (status=${payload.status})`,
+        });
+      } else {
+        // status === "0000" means subscribe succeeded (ACK). Not an error.
+        // Avoid sending it as "error" because the main thread marks WS as degraded on errors.
       }
       return;
     }

@@ -52,6 +52,13 @@ const seqByMarket = new Map<string, number>();
 const MAX_RETRIES = 5;
 const BASE_DELAY_MS = 400;
 const MAX_DELAY_MS = 8000;
+const SUBSCRIBE_CHUNK_SIZE = 100;
+
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
 
 function send(msg: OutMessage) {
   (self as unknown as Worker).postMessage(msg);
@@ -108,13 +115,18 @@ function connect() {
     clearReconnectTimer();
     send({ type: "open" });
     try {
-      ws?.send(
-        JSON.stringify([
-          { ticket: "crypto-market-viewer" },
-          { type: "ticker", codes: markets },
-          { format: "DEFAULT" },
-        ]),
-      );
+      // Upbit WS may close when too many codes are subscribed at once.
+      // Subscribe in chunks to stay under per-message limits.
+      const codesChunks = chunk(markets, SUBSCRIBE_CHUNK_SIZE);
+      for (const codes of codesChunks) {
+        ws?.send(
+          JSON.stringify([
+            { ticket: "crypto-market-viewer" },
+            { type: "ticker", codes },
+            { format: "DEFAULT" },
+          ]),
+        );
+      }
     } catch {
       // ignore
     }
@@ -138,7 +150,21 @@ function connect() {
     send({ type: "error", message: "Upbit WS error" });
   };
 
-  ws.onclose = () => {
+  ws.onclose = (ev) => {
+    const code =
+      ev && typeof (ev as CloseEvent).code === "number"
+        ? (ev as CloseEvent).code
+        : undefined;
+    const reason =
+      ev && typeof (ev as CloseEvent).reason === "string"
+        ? (ev as CloseEvent).reason
+        : undefined;
+    if (code !== undefined || reason) {
+      send({
+        type: "error",
+        message: `Upbit WS closed (code=${code ?? "?"}, reason=${reason ?? ""})`,
+      });
+    }
     send({ type: "close" });
     scheduleReconnect();
   };

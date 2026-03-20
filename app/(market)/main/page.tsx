@@ -4,6 +4,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useExchangeRate } from "@/hooks/useExchangeRate";
 import { useT } from "@/hooks/useT";
 import Loading from "./loading";
+import { CoinListTable } from "./components/CoinListTable";
 
 interface CoinData {
   symbol: string;
@@ -110,8 +111,14 @@ const hideLoadingAfterMinTime = (
 /**
  * KorP (Korean Premium) 계산
  */
-const calculateKorP = (koreanPrice: number, globalPrice: number): number => {
-  return ((koreanPrice - globalPrice) / globalPrice) * 100;
+const calculateKorP = (
+  koreanPrice: number,
+  globalPrice: number,
+): number | undefined => {
+  if (!Number.isFinite(koreanPrice) || !Number.isFinite(globalPrice)) return;
+  if (globalPrice <= 0) return;
+  const v = ((koreanPrice - globalPrice) / globalPrice) * 100;
+  return Number.isFinite(v) ? v : undefined;
 };
 
 export default function MainPage() {
@@ -303,7 +310,7 @@ export default function MainPage() {
       clearedCoins.set(symbol, {
         ...coin,
         koreanPrice: undefined,
-        korp: 0,
+        korp: undefined,
         domesticChangePercent: undefined,
         domesticChangeAmount: undefined,
         domesticTradeValueKrw: undefined,
@@ -318,19 +325,44 @@ export default function MainPage() {
     let upbitFallbackTimer: NodeJS.Timeout | null = null;
     let bithumbFallbackTimer: NodeJS.Timeout | null = null;
 
+    const lastLogRef = { current: new Map<string, number>() };
+    const logThrottled = (key: string, message: string, data?: unknown) => {
+      const now = Date.now();
+      const last = lastLogRef.current.get(key) ?? 0;
+      if (now - last < 1200) return;
+      lastLogRef.current.set(key, now);
+      if (data !== undefined) console.log(message, data);
+      else console.log(message);
+    };
+
     const connectKoreanExchangeWebSocket = () => {
       try {
         if (selectedExchange === "업비트 KRW") {
           setUpbitConnectionStatus("connecting");
           upbitConnectionStatusRef.current = "connecting";
+          console.log("[Upbit] WS connecting…");
           hideLoadingAfterMinTime(
             exchangeLoadingStartTimeRef,
             setShowExchangeLoading,
           );
 
-          const markets = upbitMarketsRef.current.filter((m) =>
-            m.startsWith("KRW-"),
-          );
+          const ensureUpbitMarkets = async () => {
+            if (upbitMarketsRef.current.length) return;
+            try {
+              const res = await fetch("/api/upbit/markets");
+              if (!res.ok) return;
+              const arr = (await res.json()) as { market: string }[];
+              upbitMarketsRef.current = arr
+                .map((m) => m.market)
+                .filter((m) => typeof m === "string");
+            } catch {
+              // ignore
+            }
+          };
+
+          // Ensure markets are ready BEFORE starting WS (avoid starting with empty list).
+          // If it still fails, REST fallback will take over.
+          void ensureUpbitMarkets();
 
           // WS in Web Worker
           upbitWorker = new Worker(
@@ -363,6 +395,7 @@ export default function MainPage() {
             if (msg.type === "open") {
               setUpbitConnectionStatus("live");
               upbitConnectionStatusRef.current = "live";
+              console.log("[Upbit] WS live (worker open)");
               return;
             }
             if (msg.type === "close" || msg.type === "error") {
@@ -372,11 +405,16 @@ export default function MainPage() {
                 setUpbitConnectionStatus("degraded");
                 upbitConnectionStatusRef.current = "degraded";
               }
+              console.warn(
+                `[Upbit] WS ${msg.type} -> degraded (fallback eligible)`,
+                msg.message ? { message: msg.message } : undefined,
+              );
               return;
             }
             if (msg.type === "reconnect_failed") {
               setUpbitConnectionStatus("degraded");
               upbitConnectionStatusRef.current = "degraded";
+              console.warn("[Upbit] WS reconnect_failed -> start REST fallback");
               startUpbitAdaptiveFallback();
               return;
             }
@@ -414,15 +452,57 @@ export default function MainPage() {
               isDomesticReadyRef.current = true;
             }
           };
-          upbitWorker.postMessage({ type: "start", markets });
+          // If the list is empty right now, wait briefly for ensureUpbitMarkets()
+          // then start the worker with a fresh list.
+          const startUpbitWorker = async () => {
+            await ensureUpbitMarkets();
+            const fresh = upbitMarketsRef.current.filter((m) =>
+              m.startsWith("KRW-"),
+            );
+            if (!fresh.length) {
+              console.warn(
+                "[Upbit] WS skipped: empty markets list (will rely on REST fallback)",
+              );
+              return;
+            }
+            upbitWorker?.postMessage({ type: "start", markets: fresh });
+          };
+          void startUpbitWorker();
 
           // If WS doesn't deliver quickly, start adaptive fallback polling.
-          const marketsParam = markets.join(",");
           let upbitBackoffMs = 800;
           const fetchFallbackOnce = async () => {
             try {
+              const upbitKrwMarkets = upbitMarketsRef.current.filter((m) =>
+                m.startsWith("KRW-"),
+              );
+              if (!upbitKrwMarkets.length) {
+                await ensureUpbitMarkets();
+              }
+              const freshMarkets = upbitMarketsRef.current.filter((m) =>
+                m.startsWith("KRW-"),
+              );
+              const marketsParam = freshMarkets.join(",");
+              if (!marketsParam.trim()) {
+                logThrottled(
+                  "upbit_fallback_skip_empty_markets",
+                  "[Upbit] REST fallback skipped: empty markets list",
+                );
+                return;
+              }
+
+              logThrottled(
+                "upbit_fallback_fetch",
+                `[Upbit] REST fallback fetch (markets=${freshMarkets.length})`,
+              );
               const res = await fetch(`/api/upbit?markets=${marketsParam}`);
-              if (!res.ok) return;
+              if (!res.ok) {
+                logThrottled(
+                  "upbit_fallback_http_error",
+                  `[Upbit] REST fallback HTTP ${res.status}`,
+                );
+                return;
+              }
               const arr = (await res.json()) as UpbitTicker[];
               const nowTs = Date.now();
               let seq = 0;
@@ -464,25 +544,40 @@ export default function MainPage() {
               // success -> reset backoff (keep adaptive)
               upbitBackoffMs = 800;
             } catch {
+              logThrottled(
+                "upbit_fallback_exception",
+                "[Upbit] REST fallback exception",
+              );
               // ignore
             }
           };
 
           const scheduleUpbitFallback = (delay: number) => {
             if (upbitFallbackTimer) clearTimeout(upbitFallbackTimer);
+            logThrottled(
+              "upbit_fallback_schedule",
+              `[Upbit] REST fallback scheduled in ${delay}ms`,
+            );
             upbitFallbackTimer = setTimeout(async () => {
               if (selectedExchange !== "업비트 KRW") return;
               if (
                 isDomesticReadyRef.current &&
                 upbitConnectionStatusRef.current === "live"
               )
-                return;
+                return logThrottled(
+                  "upbit_fallback_stop_ws_live",
+                  "[Upbit] REST fallback stopped: WS live + domestic ready",
+                );
               await fetchFallbackOnce();
               if (!isDomesticReadyRef.current) {
                 upbitBackoffMs = Math.min(5_000, upbitBackoffMs * 2);
               } else {
                 upbitBackoffMs = Math.min(5_000, upbitBackoffMs * 1.25);
               }
+              logThrottled(
+                "upbit_fallback_next_delay",
+                `[Upbit] REST fallback next backoff=${upbitBackoffMs}ms (ready=${isDomesticReadyRef.current})`,
+              );
               scheduleUpbitFallback(upbitBackoffMs);
             }, delay);
           };
@@ -490,13 +585,21 @@ export default function MainPage() {
           const startUpbitAdaptiveFallback = () => {
             // start only once
             if (upbitFallbackTimer) return;
+            console.warn("[Upbit] REST fallback started (adaptive)");
             scheduleUpbitFallback(1500);
           };
 
-          startUpbitAdaptiveFallback();
+          // Only start REST fallback after a grace period *if* WS still isn't live/ready.
+          setTimeout(() => {
+            if (selectedExchange !== "업비트 KRW") return;
+            if (isDomesticReadyRef.current) return;
+            if (upbitConnectionStatusRef.current === "live") return;
+            startUpbitAdaptiveFallback();
+          }, 2500);
         } else if (selectedExchange === "빗썸 KRW") {
           setBithumbConnectionStatus("connecting");
           bithumbConnectionStatusRef.current = "connecting";
+          console.log("[Bithumb] WS connecting…");
           hideLoadingAfterMinTime(
             exchangeLoadingStartTimeRef,
             setShowExchangeLoading,
@@ -535,6 +638,7 @@ export default function MainPage() {
             if (msg.type === "open") {
               setBithumbConnectionStatus("live");
               bithumbConnectionStatusRef.current = "live";
+              console.log("[Bithumb] WS live (worker open)");
               return;
             }
             if (msg.type === "close" || msg.type === "error") {
@@ -542,11 +646,16 @@ export default function MainPage() {
                 setBithumbConnectionStatus("degraded");
                 bithumbConnectionStatusRef.current = "degraded";
               }
+              console.warn(
+                `[Bithumb] WS ${msg.type} -> degraded (fallback eligible)`,
+                msg.message ? { message: msg.message } : undefined,
+              );
               return;
             }
             if (msg.type === "reconnect_failed") {
               setBithumbConnectionStatus("degraded");
               bithumbConnectionStatusRef.current = "degraded";
+              console.warn("[Bithumb] WS reconnect_failed -> start REST fallback");
               startBithumbAdaptiveFallback();
               return;
             }
@@ -596,6 +705,10 @@ export default function MainPage() {
           let bithumbBackoffMs = 1200;
           const fetchBithumbFallbackOnce = async () => {
             try {
+              logThrottled(
+                "bithumb_fallback_fetch",
+                "[Bithumb] REST fallback fetch (/api/bithumb/all-krw)",
+              );
               const response = await fetch("/api/bithumb/all-krw");
               if (response.ok) {
                 const data = await response.json();
@@ -669,8 +782,14 @@ export default function MainPage() {
                     bithumbConnectionStatusRef.current = next;
                     return next;
                   });
-                  bithumbBackoffMs = 1200;
+                  // Do NOT reset backoff on success while WS isn't live.
+                  // Let scheduleBithumbFallback() adapt (and cap at 5s) to reduce log/network spam.
                 }
+              } else {
+                logThrottled(
+                  "bithumb_fallback_http_error",
+                  `[Bithumb] REST fallback HTTP ${response.status}`,
+                );
               }
             } catch (error) {
               console.error("Error fetching Bithumb data:", error);
@@ -679,29 +798,47 @@ export default function MainPage() {
 
           const scheduleBithumbFallback = (delay: number) => {
             if (bithumbFallbackTimer) clearTimeout(bithumbFallbackTimer);
+            logThrottled(
+              "bithumb_fallback_schedule",
+              `[Bithumb] REST fallback scheduled in ${delay}ms`,
+            );
             bithumbFallbackTimer = setTimeout(async () => {
               if (selectedExchange !== "빗썸 KRW") return;
               if (
                 isDomesticReadyRef.current &&
                 bithumbConnectionStatusRef.current === "live"
               )
-                return;
+                return logThrottled(
+                  "bithumb_fallback_stop_ws_live",
+                  "[Bithumb] REST fallback stopped: WS live + domestic ready",
+                );
               await fetchBithumbFallbackOnce();
               if (!isDomesticReadyRef.current) {
                 bithumbBackoffMs = Math.min(5_000, bithumbBackoffMs * 2);
               } else {
                 bithumbBackoffMs = Math.min(5_000, bithumbBackoffMs * 1.25);
               }
+              logThrottled(
+                "bithumb_fallback_next_delay",
+                `[Bithumb] REST fallback next backoff=${bithumbBackoffMs}ms (ready=${isDomesticReadyRef.current})`,
+              );
               scheduleBithumbFallback(bithumbBackoffMs);
             }, delay);
           };
 
           const startBithumbAdaptiveFallback = () => {
             if (bithumbFallbackTimer) return;
+            console.warn("[Bithumb] REST fallback started (adaptive)");
             scheduleBithumbFallback(1500);
           };
 
-          startBithumbAdaptiveFallback();
+          // Only start REST fallback after a grace period *if* WS still isn't live/ready.
+          setTimeout(() => {
+            if (selectedExchange !== "빗썸 KRW") return;
+            if (isDomesticReadyRef.current) return;
+            if (bithumbConnectionStatusRef.current === "live") return;
+            startBithumbAdaptiveFallback();
+          }, 2500);
         }
       } catch (error) {
         console.error("Korean Exchange WebSocket 연결 실패:", error);
@@ -825,9 +962,22 @@ export default function MainPage() {
     });
 
   const formatPrice = (price: number) => {
+    if (!Number.isFinite(price)) return "-";
+    const abs = Math.abs(price);
+    // Small-price coins (e.g. BTT 0.000524) need more precision.
+    const maximumFractionDigits =
+      abs >= 1000
+        ? 0
+        : abs >= 1
+          ? 2
+          : abs >= 0.01
+            ? 4
+            : abs >= 0.0001
+              ? 6
+              : 8;
     return price.toLocaleString("ko-KR", {
       minimumFractionDigits: 0,
-      maximumFractionDigits: 2,
+      maximumFractionDigits,
     });
   };
 
@@ -835,6 +985,10 @@ export default function MainPage() {
     const millions = Math.round(valueKrw / 1_000_000);
     return `${millions.toLocaleString("ko-KR")}백만`;
   };
+
+  const onSelectSymbol = useCallback((symbol: string) => {
+    setSelectedSymbol(symbol);
+  }, []);
 
   // 첫 로딩 시에만 loading.tsx 표시
   if (isInitialLoading) {
@@ -936,317 +1090,34 @@ export default function MainPage() {
                 </div>
               )}
 
-              <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden modern-scrollbar">
-                <div className="sticky top-0 z-[1] grid grid-cols-[minmax(0,1fr)_52px_88px_64px_64px] gap-1.5 px-2 py-2 text-[12px] text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-800 overflow-x-hidden bg-white dark:bg-gray-900">
-                  {(() => {
-                    const SortIcon = ({
-                      active,
-                      dir,
-                    }: {
-                      active: boolean;
-                      dir: "asc" | "desc";
-                    }) => {
-                      // Material-style: arrow_drop_up / arrow_drop_down
-                      return active ? (
-                        <svg
-                          viewBox="0 0 24 24"
-                          width="16"
-                          height="16"
-                          className="shrink-0 text-gray-600 dark:text-gray-300"
-                          aria-hidden="true"
-                        >
-                          {dir === "asc" ? (
-                            <path
-                              fill="currentColor"
-                              d="M7 14l5-5 5 5H7z"
-                            />
-                          ) : (
-                            <path
-                              fill="currentColor"
-                              d="M7 10l5 5 5-5H7z"
-                            />
-                          )}
-                        </svg>
-                      ) : (
-                        <svg
-                          viewBox="0 0 24 24"
-                          width="16"
-                          height="16"
-                          className="shrink-0 text-gray-400 dark:text-gray-600 opacity-70"
-                          aria-hidden="true"
-                        >
-                          <path
-                            fill="currentColor"
-                            d="M7 10l5-5 5 5H7zm0 4h10l-5 5-5-5z"
-                          />
-                        </svg>
-                      );
-                    };
-
-                    const HeaderButton = ({
-                      sortKey,
-                      align,
-                      label,
-                    }: {
-                      sortKey: SortKey;
-                      align: "left" | "right";
-                      label: string;
-                    }) => {
-                      const active = sort.key === sortKey;
-                      const dir = sort.dir;
-                      const justify =
-                        align === "right" ? "justify-end" : "justify-start";
-                      return (
-                        <button
-                          type="button"
-                          onClick={() => toggleSort(sortKey)}
-                          className={`group inline-flex w-full items-center gap-1 ${justify} select-none`}
-                        >
-                          <span className="leading-none">{label}</span>
-                          <SortIcon active={active} dir={dir} />
-                        </button>
-                      );
-                    };
-
-                    return (
-                      <>
-                        <HeaderButton
-                          sortKey="name"
-                          align="left"
-                          label={t("table.name")}
-                        />
-                        <HeaderButton
-                          sortKey="korp"
-                          align="right"
-                          label={t("table.korp")}
-                        />
-                        <HeaderButton
-                          sortKey="price"
-                          align="right"
-                          label={t("table.price")}
-                        />
-                        <HeaderButton
-                          sortKey="change"
-                          align="right"
-                          label={t("table.change24h")}
-                        />
-                        <HeaderButton
-                          sortKey="volume"
-                          align="right"
-                          label={t("table.volume24h")}
-                        />
-                      </>
-                    );
-                  })()}
-                </div>
-
-                {!isDomesticReady ? (
-                  selectedExchange === "업비트 KRW" ? (
-                    <div className="p-4">
-                      <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-3">
-                        <div className="flex items-start gap-3">
-                          <div
-                            className={`mt-0.5 shrink-0 ${
-                              upbitConnectionStatus === "connecting"
-                                ? "text-yellow-500"
-                                : upbitConnectionStatus === "degraded"
-                                  ? "text-orange-500"
-                                  : "text-gray-400"
-                            }`}
-                            aria-hidden="true"
-                          >
-                            {/* Material-style: autorenew */}
-                            <svg viewBox="0 0 24 24" width="18" height="18">
-                              <path
-                                fill="currentColor"
-                                d="M12 6V3L8 7l4 4V8c2.76 0 5 2.24 5 5a5 5 0 0 1-8.66 3.54l-1.42 1.42A7 7 0 1 0 12 6z"
-                              />
-                            </svg>
-                          </div>
-
-                          <div className="min-w-0 flex-1">
-                            <div className="text-sm font-medium text-gray-900 dark:text-white">
-                              {upbitConnectionStatus === "degraded"
-                                ? t("market.connectionFailed")
-                                : t("market.connectionPending")}
-                            </div>
-                            <div className="mt-1 text-xs text-gray-600 dark:text-gray-400">
-                              {t("market.staleDataHidden")}
-                            </div>
-                          </div>
-
-                          <div className="shrink-0 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                            {t("market.connectionPending")}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ) : selectedExchange === "빗썸 KRW" ? (
-                    <div className="p-4">
-                      <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-3">
-                        <div className="flex items-start gap-3">
-                          <div
-                            className={`mt-0.5 shrink-0 ${
-                              bithumbConnectionStatus === "connecting"
-                                ? "text-yellow-500"
-                                : bithumbConnectionStatus === "degraded"
-                                  ? "text-orange-500"
-                                  : "text-gray-400"
-                            }`}
-                            aria-hidden="true"
-                          >
-                            {/* Material-style: autorenew */}
-                            <svg viewBox="0 0 24 24" width="18" height="18">
-                              <path
-                                fill="currentColor"
-                                d="M12 6V3L8 7l4 4V8c2.76 0 5 2.24 5 5a5 5 0 0 1-8.66 3.54l-1.42 1.42A7 7 0 1 0 12 6z"
-                              />
-                            </svg>
-                          </div>
-
-                          <div className="min-w-0 flex-1">
-                            <div className="text-sm font-medium text-gray-900 dark:text-white">
-                              {bithumbConnectionStatus === "degraded"
-                                ? t("market.connectionFailed")
-                                : t("market.connectionPending")}
-                            </div>
-                            <div className="mt-1 text-xs text-gray-600 dark:text-gray-400">
-                              {t("market.staleDataHidden")}
-                            </div>
-                          </div>
-
-                          <div className="shrink-0 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                            {t("market.connectionPending")}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div>
-                      {Array.from({ length: 12 }).map((_, i) => (
-                        <SkeletonRow key={i} keyProp={i} />
-                      ))}
-                    </div>
-                  )
-                ) : (
-                  filteredCoins.map((coin) => {
-                    const isSelected = coin.symbol === selectedCoinSymbol;
-                    const domPrice = coin.koreanPrice;
-                    const globalKrw =
-                      coin.globalPriceUsdt !== undefined
-                        ? coin.globalPriceUsdt * usdtToKrwRateRef.current
-                        : undefined;
-
-                    return (
-                      <button
-                        key={coin.symbol}
-                        type="button"
-                        onClick={() => setSelectedSymbol(coin.symbol)}
-                        className={`w-full text-left px-2 py-2.5 border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors overflow-hidden ${
-                          isSelected
-                            ? "bg-yellow-50/60 dark:bg-yellow-400/10"
-                            : ""
-                        }`}
-                      >
-                        <div className="grid grid-cols-[minmax(0,1fr)_52px_88px_64px_64px] gap-1.5 items-center">
-                          <div className="min-w-0 text-left">
-                            <div className="text-[13px] font-medium whitespace-normal break-words leading-snug">
-                              {coin.name}
-                            </div>
-                            <div className="text-[11px] text-gray-500 dark:text-gray-400 truncate">
-                              {coin.symbol}
-                            </div>
-                          </div>
-
-                          <div className="text-right tabular-nums">
-                            {coin.korp !== undefined ? (
-                              <div>
-                                <div
-                                  className={`text-[13px] font-semibold ${
-                                    coin.korp >= 0
-                                      ? "text-green-600 dark:text-green-400"
-                                      : "text-red-600 dark:text-red-400"
-                                  }`}
-                                >
-                                  {coin.korp >= 0 ? "+" : ""}
-                                  {coin.korp.toFixed(2)}%
-                                </div>
-                                <div className="text-[10px] text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                                  {coin.koreanPrice !== undefined &&
-                                  globalKrw !== undefined ? (
-                                    (() => {
-                                      const diff = coin.koreanPrice - globalKrw;
-                                      return `${diff >= 0 ? "+" : "-"}${formatPrice(
-                                        Math.abs(diff),
-                                      )}`;
-                                    })()
-                                  ) : (
-                                    <span>-</span>
-                                  )}
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="text-[13px] font-semibold text-gray-500 dark:text-gray-400">
-                                -
-                              </div>
-                            )}
-                          </div>
-
-                          <div
-                            className={`text-right tabular-nums ${
-                              priceFlash.get(coin.symbol) === "up"
-                                ? "animate-flash-green"
-                                : priceFlash.get(coin.symbol) === "down"
-                                  ? "animate-flash-red"
-                                  : ""
-                            }`}
-                          >
-                            <div className="text-[13px] font-semibold">
-                              {domPrice ? formatPrice(domPrice) : "-"}
-                            </div>
-                            <div className="text-[10px] text-gray-500 dark:text-gray-400 truncate">
-                              {globalKrw !== undefined
-                                ? formatPrice(globalKrw)
-                                : "-"}
-                            </div>
-                          </div>
-
-                          <div
-                            className={`text-right tabular-nums font-semibold ${
-                              (coin.domesticChangePercent ?? 0) >= 0
-                                ? "text-green-600 dark:text-green-400"
-                                : "text-red-600 dark:text-red-400"
-                            }`}
-                          >
-                            <div className="text-[13px]">
-                              {coin.domesticChangePercent !== undefined
-                                ? `${coin.domesticChangePercent >= 0 ? "+" : ""}${coin.domesticChangePercent.toFixed(2)}%`
-                                : "-"}
-                            </div>
-                            <div className="text-[10px] text-gray-500 dark:text-gray-400 truncate">
-                              {coin.domesticChangeAmount !== undefined
-                                ? `${coin.domesticChangeAmount >= 0 ? "+" : "-"}${formatPrice(
-                                    Math.abs(coin.domesticChangeAmount),
-                                  )}`
-                                : "-"}
-                            </div>
-                          </div>
-
-                          <div className="text-right tabular-nums">
-                            <div className="text-[13px] font-semibold whitespace-nowrap">
-                              {coin.domesticTradeValueKrw !== undefined
-                                ? formatTradeValueInMillionsKrw(
-                                    coin.domesticTradeValueKrw,
-                                  )
-                                : "-"}
-                            </div>
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })
-                )}
-              </div>
+              <CoinListTable
+                t={t as unknown as (key: string, params?: Record<string, string | number>) => string}
+                sort={sort}
+                onToggleSort={toggleSort as unknown as (key: "name" | "korp" | "price" | "change" | "volume") => void}
+                isDomesticReady={isDomesticReady}
+                selectedExchange={selectedExchange}
+                upbitConnectionStatus={upbitConnectionStatus}
+                bithumbConnectionStatus={bithumbConnectionStatus}
+                coins={filteredCoins.map((coin) => ({
+                  symbol: coin.symbol,
+                  name: coin.name,
+                  korp: coin.korp,
+                  koreanPrice: coin.koreanPrice,
+                  globalPriceKrw:
+                    coin.globalPriceUsdt !== undefined
+                      ? coin.globalPriceUsdt * usdtToKrwRateRef.current
+                      : undefined,
+                  domesticChangePercent: coin.domesticChangePercent,
+                  domesticChangeAmount: coin.domesticChangeAmount,
+                  domesticTradeValueKrw: coin.domesticTradeValueKrw,
+                }))}
+                selectedSymbol={selectedCoinSymbol}
+                priceFlash={priceFlash}
+                onSelect={onSelectSymbol}
+                formatPrice={formatPrice}
+                formatTradeValueInMillionsKrw={formatTradeValueInMillionsKrw}
+                SkeletonRow={SkeletonRow}
+              />
             </div>
           </aside>
 
