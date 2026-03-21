@@ -45,7 +45,7 @@ export const translations: Record<Locale, Record<TranslationKey, string>> = {
     "market.connectionFailed": "연결이 원활하지 않아요.",
     "market.retryConnect": "재연결",
     "market.staleDataHidden": "이전 데이터는 숨겼어요. 재연결 후 표시됩니다.",
-    "table.name": "이름",
+    "table.name": "한글명",
     "table.price": "현재가",
     "table.korp": "KorP",
     "table.change24h": "전일대비",

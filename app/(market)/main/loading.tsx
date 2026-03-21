@@ -9,13 +9,15 @@ export default function Loading() {
       key={i}
       className="px-2 py-2.5 border-b border-gray-100 dark:border-gray-800"
     >
-      <div className="grid grid-cols-[minmax(0,1fr)_52px_88px_64px_64px] gap-1.5 items-center">
+      <div className="grid grid-cols-[minmax(0,1fr)_88px_52px_64px_64px] gap-1.5 items-center">
         <div className="min-w-0">
           <div className="h-3 w-28 bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
           <div className="mt-1 h-2.5 w-12 bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
         </div>
-        <div className="h-3 w-10 ml-auto bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
         <div className="h-3 w-16 ml-auto bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
+        <div className="ml-[2px] flex justify-end">
+          <div className="h-3 w-10 bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
+        </div>
         <div className="h-3 w-12 ml-auto bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
         <div className="h-3 w-14 ml-auto bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
       </div>
@@ -44,10 +46,10 @@ export default function Loading() {
             </div>
 
             <div className="flex-1 min-h-0 overflow-hidden">
-              <div className="grid grid-cols-[minmax(0,1fr)_52px_88px_64px_64px] gap-1.5 px-2 py-2 text-[10px] text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-800 overflow-x-hidden">
+              <div className="grid grid-cols-[minmax(0,1fr)_88px_52px_64px_64px] gap-1.5 px-2 py-2 text-[10px] text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-800 overflow-x-hidden">
                 <div>{t("table.name")}</div>
-                <div className="text-right">{t("table.korp")}</div>
                 <div className="text-right">{t("table.price")}</div>
+                <div className="ml-1 text-right">{t("table.korp")}</div>
                 <div className="text-right">{t("table.change24h")}</div>
                 <div className="text-right">{t("table.volume24h")}</div>
               </div>

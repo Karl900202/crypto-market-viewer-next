@@ -175,6 +175,12 @@ function parseAndEmit(text: string) {
     const payload = JSON.parse(text) as UpbitWsTicker;
     const market = payload.code ?? payload.market;
     if (!market) return;
+    if (
+      typeof payload.trade_price !== "number" ||
+      !Number.isFinite(payload.trade_price)
+    ) {
+      return;
+    }
     const ts =
       (typeof payload.trade_timestamp === "number" && payload.trade_timestamp) ||
       (typeof payload.timestamp === "number" && payload.timestamp) ||

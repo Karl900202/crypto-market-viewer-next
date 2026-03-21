@@ -1,13 +1,19 @@
 "use client";
 
 import React, { memo } from "react";
-import type { PriceFlashDir } from "./CoinRow";
-import { CoinRow } from "./CoinRow";
+import {
+  CoinRow,
+  COIN_LIST_ROW_GRID_CLASS,
+  type PriceFlashDir,
+} from "./CoinRow";
 
 export type SortKey = "name" | "korp" | "price" | "change" | "volume";
 export type SortDir = "asc" | "desc";
 
-type SortState = { key: SortKey; dir: SortDir };
+/** `default`: 거래대금 내림차순(초기). 컬럼 클릭 시 asc → desc → default 사이클 */
+export type SortState =
+  | { mode: "default" }
+  | { mode: "custom"; key: SortKey; dir: SortDir };
 
 type CoinView = {
   symbol: string;
@@ -37,6 +43,7 @@ export type CoinListTableProps = {
   SkeletonRow: React.ComponentType<{ keyProp: number }>;
 };
 
+/** 위·아래 화살표 항상 동시 표시, 정렬 방향은 삼각형 색으로만 구분 */
 const SortIcon = memo(function SortIcon({
   active,
   dir,
@@ -44,29 +51,33 @@ const SortIcon = memo(function SortIcon({
   active: boolean;
   dir: "asc" | "desc";
 }) {
-  return active ? (
+  const muted = "text-gray-300 dark:text-gray-600";
+  const neutral = "text-gray-400 dark:text-gray-500 opacity-90";
+  const highlight = "text-[#1261c4] dark:text-blue-400";
+
+  let upClass: string;
+  let downClass: string;
+  if (!active) {
+    upClass = neutral;
+    downClass = neutral;
+  } else if (dir === "asc") {
+    upClass = highlight;
+    downClass = muted;
+  } else {
+    upClass = muted;
+    downClass = highlight;
+  }
+
+  return (
     <svg
       viewBox="0 0 24 24"
-      width="16"
-      height="16"
-      className="shrink-0 text-gray-600 dark:text-gray-300"
+      width="12"
+      height="12"
+      className="shrink-0 opacity-80"
       aria-hidden="true"
     >
-      {dir === "asc" ? (
-        <path fill="currentColor" d="M7 14l5-5 5 5H7z" />
-      ) : (
-        <path fill="currentColor" d="M7 10l5 5 5-5H7z" />
-      )}
-    </svg>
-  ) : (
-    <svg
-      viewBox="0 0 24 24"
-      width="16"
-      height="16"
-      className="shrink-0 text-gray-400 dark:text-gray-600 opacity-70"
-      aria-hidden="true"
-    >
-      <path fill="currentColor" d="M7 10l5-5 5 5H7zm0 4h10l-5 5-5-5z" />
+      <path className={upClass} fill="currentColor" d="M7 10l5-5 5 5H7z" />
+      <path className={downClass} fill="currentColor" d="M7 14h10l-5 5-5-5z" />
     </svg>
   );
 });
@@ -77,23 +88,30 @@ const HeaderButton = memo(function HeaderButton({
   label,
   sort,
   onToggleSort,
+  className,
 }: {
   sortKey: SortKey;
   align: "left" | "right";
   label: string;
   sort: SortState;
   onToggleSort: (key: SortKey) => void;
+  className?: string;
 }) {
-  const active = sort.key === sortKey;
+  const active =
+    sort.mode === "custom" && sort.key === sortKey;
+  const dir = sort.mode === "custom" ? sort.dir : "desc";
   const justify = align === "right" ? "justify-end" : "justify-start";
+  const labelClass = active
+    ? "text-[11px] font-medium leading-none text-[#1261c4] dark:text-blue-400"
+    : "text-[11px] font-normal leading-none text-[#8b94a1] dark:text-gray-400";
   return (
     <button
       type="button"
       onClick={() => onToggleSort(sortKey)}
-      className={`group inline-flex w-full items-center gap-1 ${justify} select-none`}
+      className={`group inline-flex w-full items-center gap-1 ${justify} select-none whitespace-nowrap ${className ?? ""}`}
     >
-      <span className="leading-none">{label}</span>
-      <SortIcon active={active} dir={sort.dir} />
+      <span className={labelClass}>{label}</span>
+      <SortIcon active={active} dir={dir} />
     </button>
   );
 });
@@ -119,19 +137,14 @@ export const CoinListTable = memo(function CoinListTable(props: CoinListTablePro
   const showEmptyState = !isDomesticReady;
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden modern-scrollbar">
-      <div className="sticky top-0 z-[1] grid grid-cols-[minmax(0,1fr)_52px_88px_64px_64px] gap-1.5 px-2 py-2 text-[12px] text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-800 overflow-x-hidden bg-white dark:bg-gray-900">
+    <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-auto modern-scrollbar">
+      <div
+        className={`sticky top-0 z-[1] w-full min-w-0 ${COIN_LIST_ROW_GRID_CLASS} border-b border-[#e5e8eb] bg-[#f9fafb] px-3 py-2 dark:border-gray-800 dark:bg-gray-800/90`}
+      >
         <HeaderButton
           sortKey="name"
           align="left"
           label={t("table.name")}
-          sort={sort}
-          onToggleSort={onToggleSort}
-        />
-        <HeaderButton
-          sortKey="korp"
-          align="right"
-          label={t("table.korp")}
           sort={sort}
           onToggleSort={onToggleSort}
         />
@@ -141,6 +154,14 @@ export const CoinListTable = memo(function CoinListTable(props: CoinListTablePro
           label={t("table.price")}
           sort={sort}
           onToggleSort={onToggleSort}
+        />
+        <HeaderButton
+          sortKey="korp"
+          align="right"
+          label={t("table.korp")}
+          sort={sort}
+          onToggleSort={onToggleSort}
+          className="ml-1"
         />
         <HeaderButton
           sortKey="change"
@@ -245,24 +266,26 @@ export const CoinListTable = memo(function CoinListTable(props: CoinListTablePro
           </div>
         )
       ) : (
-        coins.map((coin) => (
-          <CoinRow
-            key={coin.symbol}
-            symbol={coin.symbol}
-            name={coin.name}
-            korp={coin.korp}
-            koreanPrice={coin.koreanPrice}
-            globalPriceKrw={coin.globalPriceKrw}
-            domesticChangePercent={coin.domesticChangePercent}
-            domesticChangeAmount={coin.domesticChangeAmount}
-            domesticTradeValueKrw={coin.domesticTradeValueKrw}
-            isSelected={coin.symbol === selectedSymbol}
-            flash={priceFlash.get(coin.symbol) ?? null}
-            onSelect={onSelect}
-            formatPrice={formatPrice}
-            formatTradeValueInMillionsKrw={formatTradeValueInMillionsKrw}
-          />
-        ))
+        <>
+          {coins.map((coin) => (
+            <CoinRow
+              key={coin.symbol}
+              symbol={coin.symbol}
+              name={coin.name}
+              korp={coin.korp}
+              koreanPrice={coin.koreanPrice}
+              globalPriceKrw={coin.globalPriceKrw}
+              domesticChangePercent={coin.domesticChangePercent}
+              domesticChangeAmount={coin.domesticChangeAmount}
+              domesticTradeValueKrw={coin.domesticTradeValueKrw}
+              isSelected={coin.symbol === selectedSymbol}
+              flash={priceFlash.get(coin.symbol) ?? null}
+              onSelect={onSelect}
+              formatPrice={formatPrice}
+              formatTradeValueInMillionsKrw={formatTradeValueInMillionsKrw}
+            />
+          ))}
+        </>
       )}
     </div>
   );

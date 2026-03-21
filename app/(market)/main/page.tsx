@@ -4,7 +4,12 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useExchangeRate } from "@/hooks/useExchangeRate";
 import { useT } from "@/hooks/useT";
 import Loading from "./loading";
-import { CoinListTable } from "./components/CoinListTable";
+import {
+  CoinListTable,
+  type SortKey,
+  type SortState,
+} from "./components/CoinListTable";
+import { COIN_LIST_ROW_GRID_CLASS } from "./components/CoinRow";
 
 interface CoinData {
   symbol: string;
@@ -127,12 +132,7 @@ export default function MainPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedExchange, setSelectedExchange] = useState<string>("빗썸 KRW");
   const [selectedSymbol, setSelectedSymbol] = useState<string>("BTC");
-  type SortKey = "name" | "korp" | "price" | "change" | "volume";
-  type SortDir = "asc" | "desc";
-  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({
-    key: "volume",
-    dir: "desc",
-  });
+  const [sort, setSort] = useState<SortState>({ mode: "default" });
   const hasInitializedSelectedSymbolRef = useRef(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const exchangeLoadingStartTimeRef = useRef<number | null>(null);
@@ -303,6 +303,19 @@ export default function MainPage() {
       return incoming.seq > prev.seq;
     };
 
+    /** 상장 목록 대비 아직 국내가가 없는 심볼 수 (WS만으로는 저유동 종목이 비는 경우가 있음) */
+    const countMissingDomesticPrices = () => {
+      let n = 0;
+      for (const s of coinsRef.current.keys()) {
+        if (!koreanExchangePricesRef.current.has(s)) n++;
+      }
+      return n;
+    };
+
+    /** REST 폴백 중단: WS 정상 + 목록이 있고 + 모든 종목에 가격이 들어온 뒤에만 */
+    const canStopRestFallbackWhileWsLive = () =>
+      coinsRef.current.size > 0 && countMissingDomesticPrices() === 0;
+
     // 거래소 전환 시 이전 거래소 값이 남아 보이는(stale) 현상 방지
     // 국내 거래소 기준 필드는 즉시 초기화하고, 새 데이터 수신 후 채운다.
     const clearedCoins = new Map(coinsRef.current);
@@ -422,6 +435,8 @@ export default function MainPage() {
               const marketCode = msg.data.market;
               const symbol = marketCode.split("-")[1];
               if (!symbol) return;
+              const price = msg.data.tradePrice;
+              if (typeof price !== "number" || !Number.isFinite(price)) return;
               const incoming = {
                 connId: msg.data.connId ?? 1,
                 ts: msg.data.ts ?? Date.now(),
@@ -429,8 +444,6 @@ export default function MainPage() {
               };
               if (!shouldApply(symbol, incoming)) return;
               domesticLastKeyRef.current.set(symbol, incoming);
-
-              const price = msg.data.tradePrice;
               const prevPrice = koreanExchangePricesRef.current.get(symbol);
               handlePriceChange(symbol, price, prevPrice, setPriceFlash);
 
@@ -482,8 +495,7 @@ export default function MainPage() {
               const freshMarkets = upbitMarketsRef.current.filter((m) =>
                 m.startsWith("KRW-"),
               );
-              const marketsParam = freshMarkets.join(",");
-              if (!marketsParam.trim()) {
+              if (!freshMarkets.length) {
                 logThrottled(
                   "upbit_fallback_skip_empty_markets",
                   "[Upbit] REST fallback skipped: empty markets list",
@@ -495,44 +507,55 @@ export default function MainPage() {
                 "upbit_fallback_fetch",
                 `[Upbit] REST fallback fetch (markets=${freshMarkets.length})`,
               );
-              const res = await fetch(`/api/upbit?markets=${marketsParam}`);
-              if (!res.ok) {
-                logThrottled(
-                  "upbit_fallback_http_error",
-                  `[Upbit] REST fallback HTTP ${res.status}`,
-                );
-                return;
-              }
-              const arr = (await res.json()) as UpbitTicker[];
               const nowTs = Date.now();
               let seq = 0;
-              for (const item of arr) {
-                const marketCode = item.market ?? item.code;
-                if (!marketCode) continue;
-                const symbol = marketCode.split("-")[1];
-                if (!symbol) continue;
-                const ts =
-                  (typeof item.trade_timestamp === "number" &&
-                    item.trade_timestamp) ||
-                  (typeof item.timestamp === "number" && item.timestamp) ||
-                  nowTs;
-                seq += 1;
-                const incoming = { connId: 0, ts, seq };
-                if (!shouldApply(symbol, incoming)) continue;
-                domesticLastKeyRef.current.set(symbol, incoming);
-                koreanExchangePricesRef.current.set(symbol, item.trade_price);
-                koreanExchangeChangePercentRef.current.set(
-                  symbol,
-                  item.signed_change_rate * 100,
-                );
-                koreanExchangeChangeAmountRef.current.set(
-                  symbol,
-                  item.signed_change_price,
-                );
-                koreanExchangeTradeValueRef.current.set(
-                  symbol,
-                  item.acc_trade_price_24h,
-                );
+              const UPBIT_TICKER_CHUNK = 45;
+              for (let i = 0; i < freshMarkets.length; i += UPBIT_TICKER_CHUNK) {
+                const chunk = freshMarkets.slice(i, i + UPBIT_TICKER_CHUNK);
+                const marketsParam = chunk.join(",");
+                const res = await fetch(`/api/upbit?markets=${marketsParam}`);
+                if (!res.ok) {
+                  logThrottled(
+                    "upbit_fallback_http_error",
+                    `[Upbit] REST fallback HTTP ${res.status}`,
+                  );
+                  return;
+                }
+                const arr = (await res.json()) as UpbitTicker[];
+                for (const item of arr) {
+                  const marketCode = item.market ?? item.code;
+                  if (!marketCode) continue;
+                  const symbol = marketCode.split("-")[1];
+                  if (!symbol) continue;
+                  if (
+                    typeof item.trade_price !== "number" ||
+                    !Number.isFinite(item.trade_price)
+                  ) {
+                    continue;
+                  }
+                  const ts =
+                    (typeof item.trade_timestamp === "number" &&
+                      item.trade_timestamp) ||
+                    (typeof item.timestamp === "number" && item.timestamp) ||
+                    nowTs;
+                  seq += 1;
+                  const incoming = { connId: 0, ts, seq };
+                  if (!shouldApply(symbol, incoming)) continue;
+                  domesticLastKeyRef.current.set(symbol, incoming);
+                  koreanExchangePricesRef.current.set(symbol, item.trade_price);
+                  koreanExchangeChangePercentRef.current.set(
+                    symbol,
+                    item.signed_change_rate * 100,
+                  );
+                  koreanExchangeChangeAmountRef.current.set(
+                    symbol,
+                    item.signed_change_price,
+                  );
+                  koreanExchangeTradeValueRef.current.set(
+                    symbol,
+                    item.acc_trade_price_24h,
+                  );
+                }
               }
               setIsDomesticReady(true);
               isDomesticReadyRef.current = true;
@@ -562,11 +585,12 @@ export default function MainPage() {
               if (selectedExchange !== "업비트 KRW") return;
               if (
                 isDomesticReadyRef.current &&
-                upbitConnectionStatusRef.current === "live"
+                upbitConnectionStatusRef.current === "live" &&
+                canStopRestFallbackWhileWsLive()
               )
                 return logThrottled(
                   "upbit_fallback_stop_ws_live",
-                  "[Upbit] REST fallback stopped: WS live + domestic ready",
+                  "[Upbit] REST fallback stopped: WS live + all listed symbols have domestic price",
                 );
               await fetchFallbackOnce();
               if (!isDomesticReadyRef.current) {
@@ -589,11 +613,9 @@ export default function MainPage() {
             scheduleUpbitFallback(1500);
           };
 
-          // Only start REST fallback after a grace period *if* WS still isn't live/ready.
+          // WS가 먼저 살아도 저유동 종목은 틱이 늦을 수 있어, REST로 빈 종목을 채울 때까지 폴백 유지
           setTimeout(() => {
             if (selectedExchange !== "업비트 KRW") return;
-            if (isDomesticReadyRef.current) return;
-            if (upbitConnectionStatusRef.current === "live") return;
             startUpbitAdaptiveFallback();
           }, 2500);
         } else if (selectedExchange === "빗썸 KRW") {
@@ -604,8 +626,6 @@ export default function MainPage() {
             exchangeLoadingStartTimeRef,
             setShowExchangeLoading,
           );
-
-          const symbols = Array.from(coinsRef.current.keys());
 
           bithumbWorker = new Worker(
             new URL("./bithumb-ticker.worker.ts", import.meta.url),
@@ -662,6 +682,8 @@ export default function MainPage() {
             if (msg.type === "tick") {
               const symbol = msg.data.symbol;
               if (!symbol) return;
+              const close = msg.data.closePrice;
+              if (typeof close !== "number" || !Number.isFinite(close)) return;
               const incoming = {
                 connId: msg.data.connId ?? 1,
                 ts: msg.data.ts ?? Date.now(),
@@ -669,8 +691,6 @@ export default function MainPage() {
               };
               if (!shouldApply(symbol, incoming)) return;
               domesticLastKeyRef.current.set(symbol, incoming);
-
-              const close = msg.data.closePrice;
               const prevPrice = koreanExchangePricesRef.current.get(symbol);
               handlePriceChange(symbol, close, prevPrice, setPriceFlash);
               koreanExchangePricesRef.current.set(symbol, close);
@@ -699,7 +719,35 @@ export default function MainPage() {
             }
           };
 
-          bithumbWorker.postMessage({ type: "start", symbols });
+          // coinsRef는 loadListings와 레이스할 수 있음(첫 진입 시 빈 Map).
+          // 업비트와 같이 심볼이 준비된 뒤에만 WS를 시작한다.
+          const ensureBithumbSymbols = async (): Promise<string[]> => {
+            const fromRef = Array.from(coinsRef.current.keys()).filter(Boolean);
+            if (fromRef.length) return fromRef;
+            try {
+              const res = await fetch("/api/bithumb/all-krw");
+              if (!res.ok) return [];
+              const json = (await res.json()) as {
+                data?: Record<string, unknown>;
+              };
+              const data = json.data ?? {};
+              return Object.keys(data).filter((k) => k !== "date");
+            } catch {
+              return [];
+            }
+          };
+
+          const startBithumbWorker = async () => {
+            const symbols = await ensureBithumbSymbols();
+            if (!symbols.length) {
+              console.warn(
+                "[Bithumb] WS skipped: empty symbols list (will rely on REST fallback)",
+              );
+              return;
+            }
+            bithumbWorker?.postMessage({ type: "start", symbols });
+          };
+          void startBithumbWorker();
 
           // WS가 빠르게 안 오면 REST 폴백(adaptive)
           let bithumbBackoffMs = 1200;
@@ -806,11 +854,12 @@ export default function MainPage() {
               if (selectedExchange !== "빗썸 KRW") return;
               if (
                 isDomesticReadyRef.current &&
-                bithumbConnectionStatusRef.current === "live"
+                bithumbConnectionStatusRef.current === "live" &&
+                canStopRestFallbackWhileWsLive()
               )
                 return logThrottled(
                   "bithumb_fallback_stop_ws_live",
-                  "[Bithumb] REST fallback stopped: WS live + domestic ready",
+                  "[Bithumb] REST fallback stopped: WS live + all listed symbols have domestic price",
                 );
               await fetchBithumbFallbackOnce();
               if (!isDomesticReadyRef.current) {
@@ -832,11 +881,8 @@ export default function MainPage() {
             scheduleBithumbFallback(1500);
           };
 
-          // Only start REST fallback after a grace period *if* WS still isn't live/ready.
           setTimeout(() => {
             if (selectedExchange !== "빗썸 KRW") return;
-            if (isDomesticReadyRef.current) return;
-            if (bithumbConnectionStatusRef.current === "live") return;
             startBithumbAdaptiveFallback();
           }, 2500);
         }
@@ -910,12 +956,13 @@ export default function MainPage() {
   const collator = new Intl.Collator("ko-KR", { sensitivity: "base" });
   const toggleSort = (key: SortKey) => {
     setSort((prev) => {
-      if (prev.key === key) {
-        return { key, dir: prev.dir === "asc" ? "desc" : "asc" };
+      if (prev.mode === "default" || prev.key !== key) {
+        return { mode: "custom", key, dir: "asc" };
       }
-      // name은 기본 오름차순, 숫자류는 기본 내림차순(거래소 UI 관행)
-      const defaultDir: SortDir = key === "name" ? "asc" : "desc";
-      return { key, dir: defaultDir };
+      if (prev.dir === "asc") {
+        return { mode: "custom", key, dir: "desc" };
+      }
+      return { mode: "default" };
     });
   };
 
@@ -927,11 +974,10 @@ export default function MainPage() {
         coin.symbol.toLowerCase().includes(searchQuery.toLowerCase()),
     )
     .sort((a, b) => {
-      const dirMul = sort.dir === "asc" ? 1 : -1;
-
       const compareOptionalNumber = (
         av: number | undefined,
         bv: number | undefined,
+        dirMul: number,
       ) => {
         const aUndef = av === undefined || !Number.isFinite(av);
         const bUndef = bv === undefined || !Number.isFinite(bv);
@@ -941,23 +987,35 @@ export default function MainPage() {
         return (av - bv) * dirMul;
       };
 
+      if (sort.mode === "default") {
+        return compareOptionalNumber(
+          a.domesticTradeValueKrw,
+          b.domesticTradeValueKrw,
+          -1,
+        );
+      }
+
+      const dirMul = sort.dir === "asc" ? 1 : -1;
+
       if (sort.key === "name") {
         const an = a.name || a.symbol;
         const bn = b.name || b.symbol;
         return collator.compare(an, bn) * dirMul;
       }
-      if (sort.key === "korp") return compareOptionalNumber(a.korp, b.korp);
+      if (sort.key === "korp")
+        return compareOptionalNumber(a.korp, b.korp, dirMul);
       if (sort.key === "price")
-        return compareOptionalNumber(a.koreanPrice, b.koreanPrice);
+        return compareOptionalNumber(a.koreanPrice, b.koreanPrice, dirMul);
       if (sort.key === "change")
         return compareOptionalNumber(
           a.domesticChangePercent,
           b.domesticChangePercent,
+          dirMul,
         );
-      // volume
       return compareOptionalNumber(
         a.domesticTradeValueKrw,
         b.domesticTradeValueKrw,
+        dirMul,
       );
     });
 
@@ -1001,15 +1059,17 @@ export default function MainPage() {
   const SkeletonRow = ({ keyProp }: { keyProp: number }) => (
     <div
       key={keyProp}
-      className="px-2 py-2.5 border-b border-gray-100 dark:border-gray-800"
+      className="border-b border-[#eef1f5] bg-white px-3 py-2 dark:border-gray-800"
     >
-      <div className="grid grid-cols-[minmax(0,1fr)_52px_88px_64px_64px] gap-1.5 items-center">
+      <div className={COIN_LIST_ROW_GRID_CLASS}>
         <div className="min-w-0">
           <div className="h-3 w-28 bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
           <div className="mt-1 h-2.5 w-12 bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
         </div>
-        <div className="h-3 w-10 ml-auto bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
         <div className="h-3 w-16 ml-auto bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
+        <div className="ml-1 flex justify-end">
+          <div className="h-3 w-10 bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
+        </div>
         <div className="h-3 w-12 ml-auto bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
         <div className="h-3 w-14 ml-auto bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
       </div>
@@ -1017,22 +1077,22 @@ export default function MainPage() {
   );
 
   return (
-    <div className="h-full bg-white dark:bg-gray-900 text-gray-900 dark:text-white overflow-hidden">
-      <div className="mx-auto max-w-[1600px] px-2 py-2 h-full">
-        <div className="flex gap-2 h-full">
-          {/* Left: market list (Upbit/Bithumb-like) */}
-          <aside className="w-[440px] shrink-0 rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 overflow-hidden flex flex-col min-h-0">
-            <div className="border-b border-gray-200 dark:border-gray-800 p-2 shrink-0">
-              <div className="flex items-start justify-between gap-3">
+    <div className="h-full overflow-hidden bg-gray-100 text-gray-900 dark:bg-gray-950 dark:text-white">
+      <div className="flex h-full w-full min-h-0">
+        <div className="flex h-full min-h-0 w-full gap-4">
+          {/* Left: market list — 종목명 한 줄 표시를 위해 폭 여유 */}
+          <aside className="flex w-[462px] shrink-0 flex-col overflow-hidden border-r border-[#e5e8eb] bg-white dark:border-gray-800 dark:bg-gray-900 min-h-0 min-w-0">
+            <div className="shrink-0 border-b border-[#e5e8eb] px-3 py-3 dark:border-gray-800">
+              <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-xs text-gray-600 dark:text-gray-400 shrink-0">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="shrink-0 text-[13px] text-gray-500 dark:text-gray-400">
                       {t("market.baseExchange")}
                     </span>
                     <select
                       value={selectedExchange}
                       onChange={(e) => setSelectedExchange(e.target.value)}
-                      className="bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white px-2 py-1 rounded border border-gray-200 dark:border-gray-700 text-xs shrink-0"
+                      className="shrink-0 rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[13px] text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                     >
                       <option value="빗썸 KRW">빗썸 KRW</option>
                       <option value="업비트 KRW">업비트 KRW</option>
@@ -1040,7 +1100,7 @@ export default function MainPage() {
                   </div>
 
                   <div
-                    className="mt-1 text-xs text-gray-600 dark:text-gray-400 leading-tight"
+                    className="mt-1.5 pt-2 text-[13px] leading-snug text-gray-500 dark:text-gray-400"
                     title={t("market.globalReferenceHint")}
                   >
                     <span className="text-gray-500 dark:text-gray-400">
@@ -1055,28 +1115,28 @@ export default function MainPage() {
                   </div>
                 </div>
 
-                <span className="text-xs text-gray-600 dark:text-gray-400 shrink-0">
+                <span className="shrink-0 text-[13px] text-gray-500 dark:text-gray-400">
                   {t("market.totalCoins", { count: coins.size })}
                 </span>
               </div>
 
-              <div className="mt-2 flex items-center gap-2">
+              <div className="mt-3 flex items-center gap-2">
                 <div className="relative flex-1">
                   <input
                     type="text"
                     placeholder={t("market.searchPlaceholder")}
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white pl-8 pr-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 focus:outline-none focus:border-yellow-400 text-sm"
+                    className="w-full rounded border border-gray-200 bg-gray-50 py-1.5 pl-8 pr-2.5 text-xs text-gray-900 focus:border-yellow-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                   />
-                  <span className="absolute left-3 top-2 text-gray-400 text-sm">
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-400">
                     ⌕
                   </span>
                 </div>
               </div>
             </div>
 
-            <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col">
+            <div className="relative flex-1 min-h-0 min-w-0 overflow-hidden flex flex-col">
               {showExchangeLoading && (
                 <div className="absolute inset-0 bg-white/75 dark:bg-gray-900/75 backdrop-blur-sm flex items-center justify-center z-10">
                   <div className="text-center">
@@ -1093,7 +1153,7 @@ export default function MainPage() {
               <CoinListTable
                 t={t as unknown as (key: string, params?: Record<string, string | number>) => string}
                 sort={sort}
-                onToggleSort={toggleSort as unknown as (key: "name" | "korp" | "price" | "change" | "volume") => void}
+                onToggleSort={toggleSort}
                 isDomesticReady={isDomesticReady}
                 selectedExchange={selectedExchange}
                 upbitConnectionStatus={upbitConnectionStatus}
@@ -1121,24 +1181,24 @@ export default function MainPage() {
             </div>
           </aside>
 
-          {/* Right: chart area placeholder */}
-          <main className="flex-1 min-w-0 min-h-0">
-            <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 overflow-hidden h-full flex flex-col min-h-0">
-              <div className="border-b border-gray-200 dark:border-gray-800 px-4 py-3 flex items-center justify-between gap-4 shrink-0">
+          {/* Right: 시세 카드 + 차트를 하나의 패널로 */}
+          <main className="min-h-0 min-w-0 flex-1">
+            <div className="flex h-full min-h-0 flex-col overflow-hidden border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
+              <div className="flex shrink-0 items-center justify-between gap-4 px-5 py-4 ">
                 <div className="min-w-0">
-                  <div className="font-semibold truncate">
+                  <div className="truncate text-base font-semibold leading-tight">
                     {selectedCoin?.name ?? selectedCoinSymbol}
                   </div>
-                  <div className="text-sm text-gray-600 dark:text-gray-400 truncate">
+                  <div className="mt-0.5 truncate text-sm text-gray-500 dark:text-gray-400">
                     {selectedCoinSymbol}/KRW · {t("market.binanceUsdtMarket")}{" "}
                     KRW 환산
                   </div>
                 </div>
-                <div className="text-right tabular-nums">
-                  <div className="text-sm text-gray-600 dark:text-gray-400">
+                <div className="shrink-0 text-right tabular-nums">
+                  <div className="text-sm text-gray-500 dark:text-gray-400">
                     {selectedExchange.replace(" KRW", "")} / GLOBAL
                   </div>
-                  <div className="font-semibold">
+                  <div className="text-base font-semibold">
                     {selectedCoin?.koreanPrice
                       ? formatPrice(selectedCoin.koreanPrice)
                       : "-"}{" "}
@@ -1153,13 +1213,13 @@ export default function MainPage() {
                 </div>
               </div>
 
-              <div className="p-4 flex-1 min-h-0">
-                <div className="h-full rounded-xl border border-dashed border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 flex items-center justify-center">
+              <div className="min-h-0 flex-1 p-4">
+                <div className="flex h-full min-h-[280px] items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50/80 dark:border-gray-700 dark:bg-gray-800/40">
                   <div className="text-center">
-                    <div className="text-gray-700 dark:text-gray-200 font-medium">
+                    <div className="font-medium text-gray-700 dark:text-gray-200">
                       {t("chart.placeholderTitle")}
                     </div>
-                    <div className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                    <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                       {t("chart.placeholderSubtitle")}
                     </div>
                   </div>

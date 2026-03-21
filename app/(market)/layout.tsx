@@ -1,14 +1,26 @@
 import Header from "@/components/header";
 
+/** 헤더·본문 콘텐츠 열 정렬 (넓은 화면에서 좌우 여백) */
+const CONTENT_MAX_W = "max-w-[1920px]";
+
 export default function MarketLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
   return (
-    <div className="h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-white flex flex-col overflow-hidden">
+    <div className="flex h-screen flex-col overflow-hidden bg-gray-100 text-gray-900 dark:bg-gray-950 dark:text-white">
       <Header />
-      <div className="flex-1 min-h-0 overflow-hidden">{children}</div>
+
+      <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
+        <div
+          className={`mx-auto box-border flex h-full min-h-0 min-w-[1412px] w-full flex-col ${CONTENT_MAX_W} px-4 py-3`}
+        >
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+            {children}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
