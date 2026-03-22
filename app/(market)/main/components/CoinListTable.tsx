@@ -1,11 +1,15 @@
 "use client";
 
-import React, { memo } from "react";
+import React, { memo, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   CoinRow,
   COIN_LIST_ROW_GRID_CLASS,
   type PriceFlashDir,
 } from "./CoinRow";
+
+/** CoinRow: py-2 + 두 줄 텍스트 + border — 스크롤 높이 추정 */
+const COIN_LIST_ROW_ESTIMATE_PX = 56;
 
 export type SortKey = "name" | "korp" | "price" | "change" | "volume";
 export type SortDir = "asc" | "desc";
@@ -135,9 +139,20 @@ export const CoinListTable = memo(function CoinListTable(props: CoinListTablePro
   } = props;
 
   const showEmptyState = !isDomesticReady;
+  const scrollParentRef = useRef<HTMLDivElement>(null);
+  const virtualRowCount = showEmptyState ? 0 : coins.length;
+  const virtualizer = useVirtualizer({
+    count: virtualRowCount,
+    getScrollElement: () => scrollParentRef.current,
+    estimateSize: () => COIN_LIST_ROW_ESTIMATE_PX,
+    overscan: 12,
+  });
 
   return (
-    <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-auto modern-scrollbar">
+    <div
+      ref={scrollParentRef}
+      className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-auto modern-scrollbar"
+    >
       <div
         className={`sticky top-0 z-[1] w-full min-w-0 ${COIN_LIST_ROW_GRID_CLASS} border-b border-[#e5e8eb] bg-[#f9fafb] px-3 py-2 dark:border-gray-800 dark:bg-gray-800/90`}
       >
@@ -266,26 +281,37 @@ export const CoinListTable = memo(function CoinListTable(props: CoinListTablePro
           </div>
         )
       ) : (
-        <>
-          {coins.map((coin) => (
-            <CoinRow
-              key={coin.symbol}
-              symbol={coin.symbol}
-              name={coin.name}
-              korp={coin.korp}
-              koreanPrice={coin.koreanPrice}
-              globalPriceKrw={coin.globalPriceKrw}
-              domesticChangePercent={coin.domesticChangePercent}
-              domesticChangeAmount={coin.domesticChangeAmount}
-              domesticTradeValueKrw={coin.domesticTradeValueKrw}
-              isSelected={coin.symbol === selectedSymbol}
-              flash={priceFlash.get(coin.symbol) ?? null}
-              onSelect={onSelect}
-              formatPrice={formatPrice}
-              formatTradeValueInMillionsKrw={formatTradeValueInMillionsKrw}
-            />
-          ))}
-        </>
+        <div
+          className="relative w-full"
+          style={{ height: virtualizer.getTotalSize() }}
+        >
+          {virtualizer.getVirtualItems().map((virtualRow) => {
+            const coin = coins[virtualRow.index];
+            return (
+              <div
+                key={virtualRow.key}
+                className="absolute left-0 top-0 w-full"
+                style={{ transform: `translateY(${virtualRow.start}px)` }}
+              >
+                <CoinRow
+                  symbol={coin.symbol}
+                  name={coin.name}
+                  korp={coin.korp}
+                  koreanPrice={coin.koreanPrice}
+                  globalPriceKrw={coin.globalPriceKrw}
+                  domesticChangePercent={coin.domesticChangePercent}
+                  domesticChangeAmount={coin.domesticChangeAmount}
+                  domesticTradeValueKrw={coin.domesticTradeValueKrw}
+                  isSelected={coin.symbol === selectedSymbol}
+                  flash={priceFlash.get(coin.symbol) ?? null}
+                  onSelect={onSelect}
+                  formatPrice={formatPrice}
+                  formatTradeValueInMillionsKrw={formatTradeValueInMillionsKrw}
+                />
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );

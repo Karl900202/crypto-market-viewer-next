@@ -25,6 +25,34 @@ interface CoinData {
   globalPriceUsdt?: number;
 }
 
+/** 스냅샷/증분 갱신: 렌더에 쓰는 필드만 문자열로 비교 (snapshotFromMergedMap과 동일 규칙) */
+const coinDataSnapshotLine = (c: CoinData) =>
+  `${c.symbol}:${c.koreanPrice ?? ""}:${c.domesticChangePercent ?? ""}:${c.domesticChangeAmount ?? ""}:${c.domesticTradeValueKrw ?? ""}:${c.globalPriceUsdt ?? ""}:${c.korp ?? ""}`;
+
+/** ref 병합 결과를 state에 넣을 때, 변경된 심볼만 Map을 갱신해 리렌더 범위를 줄인다. */
+function mergeIncrementalCoinsState(
+  prev: Map<string, CoinData>,
+  merged: Map<string, CoinData>,
+): Map<string, CoinData> {
+  if (merged.size !== prev.size) return merged;
+  for (const k of merged.keys()) {
+    if (!prev.has(k)) return merged;
+  }
+  for (const k of prev.keys()) {
+    if (!merged.has(k)) return merged;
+  }
+  let changed = false;
+  const next = new Map(prev);
+  for (const [symbol, coin] of merged) {
+    const old = prev.get(symbol)!;
+    if (coinDataSnapshotLine(old) !== coinDataSnapshotLine(coin)) {
+      next.set(symbol, coin);
+      changed = true;
+    }
+  }
+  return changed ? next : prev;
+}
+
 interface BithumbTicker {
   opening_price: string; // 시가
   closing_price: string; // 종가 (현재가)
@@ -162,6 +190,18 @@ export default function MainPage() {
   const upbitNameMapRef = useRef<Map<string, string>>(new Map()); // symbol -> korean_name
   const upbitMarketsRef = useRef<string[]>([]);
   const binancePricesRef = useRef<Map<string, number>>(new Map()); // base -> usdt price
+  /** ref→coins state: dirty + RAF 루프(deltaTime 누적)로 1000ms마다 setCoins(증분) + 스냅샷 비교 */
+  const coinsFlushDirtyRef = useRef(false);
+  /** performance.now() 기준, 마지막으로 스냅샷이 바뀌어 setCoins 한 시각 */
+  const coinsFlushLastTsRef = useRef(0);
+  const coinsFlushSnapshotRef = useRef("");
+  const coinsFlushRafPendingRef = useRef(false);
+  const coinsFlushRafIdRef = useRef<number | null>(null);
+  /** 직전 RAF 타임스탬프(없으면 다음 프레임에서 lastTs 대비 경과를 새로 잼) */
+  const coinsFlushRafPrevTimeRef = useRef<number | null>(null);
+  /** lastTs 이후 경과 시간(ms), RAF 프레임 간 deltaTime으로 누적 */
+  const coinsFlushThrottleAccRef = useRef(0);
+  const triggerCoinsStateSyncRef = useRef<(() => void) | null>(null);
   // listingsCount is derivable from coins.size when needed
 
   // 환율 변경 콜백 메모이제이션
@@ -260,6 +300,7 @@ export default function MainPage() {
         if (!res.ok) return;
         const json = (await res.json()) as { prices: Record<string, number> };
         binancePricesRef.current = new Map(Object.entries(json.prices ?? {}));
+        triggerCoinsStateSyncRef.current?.();
       } catch {
         // ignore
       }
@@ -334,9 +375,109 @@ export default function MainPage() {
 
     let upbitWorker: Worker | null = null;
     let bithumbWorker: Worker | null = null;
-    let updateInterval: NodeJS.Timeout | null = null;
     let upbitFallbackTimer: NodeJS.Timeout | null = null;
     let bithumbFallbackTimer: NodeJS.Timeout | null = null;
+
+    const snapshotFromMergedMap = (m: Map<string, CoinData>) => {
+      const parts: string[] = [];
+      for (const symbol of [...m.keys()].sort()) {
+        const c = m.get(symbol)!;
+        parts.push(coinDataSnapshotLine(c));
+      }
+      return parts.join("|");
+    };
+
+    const mergeRefsToCoinsMap = () => {
+      const updatedCoins = new Map(coinsRef.current);
+      updatedCoins.forEach((coin, symbol) => {
+        const koreanPrice = koreanExchangePricesRef.current.get(symbol);
+        const domesticChangePercent =
+          koreanExchangeChangePercentRef.current.get(symbol);
+        const domesticChangeAmount =
+          koreanExchangeChangeAmountRef.current.get(symbol);
+        const domesticTradeValueKrw =
+          koreanExchangeTradeValueRef.current.get(symbol);
+        const globalPriceUsdt = binancePricesRef.current.get(symbol);
+        const globalKrw =
+          globalPriceUsdt !== undefined
+            ? globalPriceUsdt * usdtToKrwRateRef.current
+            : undefined;
+        const korp =
+          koreanPrice !== undefined && globalKrw !== undefined
+            ? calculateKorP(koreanPrice, globalKrw)
+            : undefined;
+        updatedCoins.set(symbol, {
+          ...coin,
+          koreanPrice,
+          korp,
+          domesticChangePercent,
+          domesticChangeAmount,
+          domesticTradeValueKrw,
+          globalPriceUsdt,
+        });
+      });
+      return updatedCoins;
+    };
+
+    const scheduleCoinsFlushRaf = () => {
+      if (coinsFlushRafPendingRef.current) return;
+      coinsFlushRafPendingRef.current = true;
+      coinsFlushRafIdRef.current = requestAnimationFrame(runCoinsFlushRaf);
+    };
+
+    const runCoinsFlushRaf = (now: number) => {
+      coinsFlushRafIdRef.current = null;
+
+      const prevTime = coinsFlushRafPrevTimeRef.current;
+      const deltaTime = prevTime === null ? 0 : now - prevTime;
+      coinsFlushRafPrevTimeRef.current = now;
+
+      const throttleMs = 1000;
+      if (prevTime === null) {
+        coinsFlushThrottleAccRef.current = now - coinsFlushLastTsRef.current;
+      } else {
+        coinsFlushThrottleAccRef.current += deltaTime;
+      }
+
+      if (coinsFlushThrottleAccRef.current < throttleMs) {
+        if (coinsFlushDirtyRef.current) {
+          coinsFlushRafIdRef.current = requestAnimationFrame(runCoinsFlushRaf);
+        } else {
+          coinsFlushRafPendingRef.current = false;
+          coinsFlushRafPrevTimeRef.current = null;
+        }
+        return;
+      }
+
+      const merged = mergeRefsToCoinsMap();
+      const snap = snapshotFromMergedMap(merged);
+      if (snap === coinsFlushSnapshotRef.current) {
+        coinsFlushDirtyRef.current = false;
+        coinsFlushRafPendingRef.current = false;
+        coinsFlushRafPrevTimeRef.current = null;
+        return;
+      }
+
+      coinsFlushSnapshotRef.current = snap;
+      coinsFlushLastTsRef.current = now;
+      coinsFlushDirtyRef.current = false;
+      coinsFlushThrottleAccRef.current = 0;
+      coinsFlushRafPrevTimeRef.current = null;
+      setCoins((prev) => mergeIncrementalCoinsState(prev, merged));
+      coinsFlushRafPendingRef.current = false;
+    };
+
+    const markCoinsFlushDirty = () => {
+      coinsFlushDirtyRef.current = true;
+      scheduleCoinsFlushRaf();
+    };
+    triggerCoinsStateSyncRef.current = markCoinsFlushDirty;
+
+    coinsFlushSnapshotRef.current = snapshotFromMergedMap(clearedCoins);
+    coinsFlushLastTsRef.current = performance.now();
+    coinsFlushThrottleAccRef.current = 0;
+    coinsFlushRafPrevTimeRef.current = null;
+    coinsFlushDirtyRef.current = false;
 
     const lastLogRef = { current: new Map<string, number>() };
     const logThrottled = (key: string, message: string, data?: unknown) => {
@@ -463,6 +604,7 @@ export default function MainPage() {
 
               setIsDomesticReady(true);
               isDomesticReadyRef.current = true;
+              markCoinsFlushDirty();
             }
           };
           // If the list is empty right now, wait briefly for ensureUpbitMarkets()
@@ -559,6 +701,7 @@ export default function MainPage() {
               }
               setIsDomesticReady(true);
               isDomesticReadyRef.current = true;
+              markCoinsFlushDirty();
               setUpbitConnectionStatus((prev) => {
                 const next = prev === "live" ? "live" : "degraded";
                 upbitConnectionStatusRef.current = next;
@@ -716,6 +859,7 @@ export default function MainPage() {
 
               setIsDomesticReady(true);
               isDomesticReadyRef.current = true;
+              markCoinsFlushDirty();
             }
           };
 
@@ -825,6 +969,7 @@ export default function MainPage() {
                   }
                   setIsDomesticReady(true);
                   isDomesticReadyRef.current = true;
+                  markCoinsFlushDirty();
                   setBithumbConnectionStatus((prev) => {
                     const next = prev === "live" ? "live" : "degraded";
                     bithumbConnectionStatusRef.current = next;
@@ -897,45 +1042,14 @@ export default function MainPage() {
 
     connectKoreanExchangeWebSocket();
 
-    // 500ms마다 ref의 데이터를 state로 업데이트
-    updateInterval = setInterval(() => {
-      const updatedCoins = new Map(coinsRef.current);
-      updatedCoins.forEach((coin, symbol) => {
-        const koreanPrice = koreanExchangePricesRef.current.get(symbol);
-        const domesticChangePercent =
-          koreanExchangeChangePercentRef.current.get(symbol);
-        const domesticChangeAmount =
-          koreanExchangeChangeAmountRef.current.get(symbol);
-        const domesticTradeValueKrw =
-          koreanExchangeTradeValueRef.current.get(symbol);
-        const globalPriceUsdt = binancePricesRef.current.get(symbol);
-        const globalKrw =
-          globalPriceUsdt !== undefined
-            ? globalPriceUsdt * usdtToKrwRateRef.current
-            : undefined;
-        const korp =
-          koreanPrice !== undefined && globalKrw !== undefined
-            ? calculateKorP(koreanPrice, globalKrw)
-            : undefined;
-
-        // 값이 없으면 undefined로 덮어써서 "이전 거래소 값"이 남지 않게 한다.
-        updatedCoins.set(symbol, {
-          ...coin,
-          koreanPrice: koreanPrice,
-          korp,
-          domesticChangePercent: domesticChangePercent,
-          domesticChangeAmount: domesticChangeAmount,
-          domesticTradeValueKrw: domesticTradeValueKrw,
-          globalPriceUsdt: globalPriceUsdt,
-        });
-      });
-      setCoins(updatedCoins);
-    }, 500);
-
     return () => {
-      if (updateInterval) {
-        clearInterval(updateInterval);
+      if (coinsFlushRafIdRef.current !== null) {
+        cancelAnimationFrame(coinsFlushRafIdRef.current);
+        coinsFlushRafIdRef.current = null;
       }
+      coinsFlushRafPendingRef.current = false;
+      coinsFlushRafPrevTimeRef.current = null;
+      triggerCoinsStateSyncRef.current = null;
       if (upbitFallbackTimer) clearTimeout(upbitFallbackTimer);
       if (bithumbFallbackTimer) clearTimeout(bithumbFallbackTimer);
       if (upbitWorker) {
