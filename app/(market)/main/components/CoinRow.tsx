@@ -61,7 +61,7 @@ export const CoinRow = memo(function CoinRow(props: CoinRowProps) {
       <div className={COIN_LIST_ROW_GRID_CLASS}>
         <div className="min-w-0 text-left">
           <div
-            className="truncate text-[13px] font-medium leading-snug text-gray-900 dark:text-white"
+            className="truncate text-[12px] font-medium leading-snug text-gray-900 dark:text-white"
             title={name}
           >
             {name}
@@ -83,7 +83,7 @@ export const CoinRow = memo(function CoinRow(props: CoinRowProps) {
                 : ""
           }`}
         >
-          <div className="text-[13px] font-semibold tabular-nums text-gray-900 dark:text-white">
+          <div className="text-[12px] font-semibold tabular-nums text-gray-900 dark:text-white">
             {domPrice !== undefined ? formatPrice(domPrice) : "-"}
           </div>
           <div className="text-[11px] text-[#8b94a1] dark:text-gray-500 whitespace-nowrap">
@@ -95,7 +95,7 @@ export const CoinRow = memo(function CoinRow(props: CoinRowProps) {
           {korp !== undefined ? (
             <div>
               <div
-                className={`text-[13px] font-semibold tabular-nums ${
+                className={`text-[12px] font-semibold tabular-nums ${
                   korp >= 0
                     ? "text-green-600 dark:text-green-400"
                     : "text-red-600 dark:text-red-400"
@@ -118,7 +118,7 @@ export const CoinRow = memo(function CoinRow(props: CoinRowProps) {
               </div>
             </div>
           ) : (
-            <div className="text-xs font-semibold text-gray-500 dark:text-gray-400">
+            <div className="text-[12px] font-semibold text-gray-500 dark:text-gray-400">
               -
             </div>
           )}
@@ -126,7 +126,7 @@ export const CoinRow = memo(function CoinRow(props: CoinRowProps) {
 
         <div className="text-right tabular-nums">
           <div
-            className={`text-[13px] font-semibold tabular-nums whitespace-nowrap ${
+            className={`text-[12px] font-semibold tabular-nums whitespace-nowrap ${
               (domesticChangePercent ?? 0) >= 0
                 ? "text-green-600 dark:text-green-400"
                 : "text-red-600 dark:text-red-400"
@@ -146,7 +146,7 @@ export const CoinRow = memo(function CoinRow(props: CoinRowProps) {
         </div>
 
         <div className="text-right tabular-nums">
-          <div className="text-[13px] font-semibold tabular-nums whitespace-nowrap text-gray-900 dark:text-white">
+          <div className="text-[12px] font-semibold tabular-nums whitespace-nowrap text-gray-900 dark:text-white">
             {domesticTradeValueKrw !== undefined
               ? formatTradeValueInMillionsKrw(domesticTradeValueKrw)
               : "-"}

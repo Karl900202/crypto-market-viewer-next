@@ -102,8 +102,8 @@ const HeaderButton = memo(function HeaderButton({
   const dir = sort.mode === "custom" ? sort.dir : "desc";
   const justify = align === "right" ? "justify-end" : "justify-start";
   const labelClass = active
-    ? "text-[11px] font-medium leading-none text-[#1261c4] dark:text-blue-400"
-    : "text-[11px] font-normal leading-none text-[#8b94a1] dark:text-gray-400";
+    ? "text-[12px] font-medium leading-none text-[#1261c4] dark:text-blue-400"
+    : "text-[12px] font-normal leading-none text-[#8b94a1] dark:text-gray-400";
   return (
     <button
       type="button"

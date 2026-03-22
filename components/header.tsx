@@ -19,25 +19,16 @@ export default function Header() {
   return (
     <header className="w-full shrink-0 border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
       {/* 배경은 전체 너비, 안쪽 콘텐츠는 본문과 같은 max-width로 정렬 */}
-      <div className="mx-auto flex h-16 w-full max-w-[1920px] items-center justify-between px-4">
+      <div className="mx-auto flex h-16 w-full max-w-[1400px] items-center justify-between px-4">
         {/* Left: logo + nav */}
-        <div className="flex min-w-0 shrink-0 items-center gap-8">
+        <div className="flex min-w-0 shrink-0 items-center gap-8 ml-8">
           <Link href="/" className="shrink-0 text-xl font-bold text-yellow-400">
             KORP
           </Link>
-
-          <nav className="hidden items-center gap-6 md:flex">
-            <Link
-              href="/main"
-              className="text-gray-900 transition-colors hover:text-yellow-400 dark:text-white"
-            >
-              {t("nav.home")}
-            </Link>
-          </nav>
         </div>
 
         {/* Right: language, theme, login */}
-        <div className="flex shrink-0 items-center gap-4">
+        <div className="flex shrink-0 items-center gap-4 mr-8">
           {/* Language: 호버 시 중앙 정렬 드롭다운 */}
           <div
             className="relative flex cursor-pointer items-center gap-1.5"
