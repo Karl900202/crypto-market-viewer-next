@@ -3,6 +3,11 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useExchangeRate } from "@/hooks/useExchangeRate";
 import { useT } from "@/hooks/useT";
+import {
+  type DomesticTickerVM,
+  mergeDomesticTickerVM,
+} from "@/lib/domestic-ticker-vm";
+import { setupDomesticExchangeConnection } from "@/lib/setup-domestic-exchange-connection";
 import Loading from "./loading";
 import {
   CoinListTable,
@@ -53,42 +58,7 @@ function mergeIncrementalCoinsState(
   return changed ? next : prev;
 }
 
-interface BithumbTicker {
-  opening_price: string; // 시가
-  closing_price: string; // 종가 (현재가)
-  min_price: string; // 저가
-  max_price: string; // 고가
-  units_traded: string; // 거래량
-  acc_trade_value: string; // 거래금액
-  acc_trade_value_24H?: string; // 24시간 거래금액 (API에 따라 존재)
-  prev_closing_price: string; // 전일종가
-  fluctate_24H: string; // 24시간 변동금액
-  fluctate_rate_24H: string; // 24시간 변동률
-}
-
-interface UpbitTicker {
-  // REST: market, WS: code
-  market?: string;
-  code?: string;
-  timestamp?: number;
-  trade_timestamp?: number;
-  opening_price: number;
-  trade_price: number;
-  trade_volume: number;
-  high_price: number;
-  low_price: number;
-  prev_closing_price: number;
-  change: string;
-  change_price: number;
-  change_rate: number;
-  signed_change_price: number;
-  signed_change_rate: number;
-  acc_trade_price: number; // UTC 0시 기준 누적 거래대금 (KST 오전 9시 리셋)
-  acc_trade_price_24h: number; // 24h 롤링
-  acc_trade_volume: number; // UTC 0시 기준 누적 거래량 (KST 오전 9시 리셋)
-  acc_trade_volume_24h: number; // 24h 롤링
-}
-
+// 거래소 DTO는 lib/domestic-ticker-vm.ts의 mapper에서 변환됨
 type UpbitMarket = {
   market: string; // e.g. KRW-BTC
   korean_name: string;
@@ -158,7 +128,7 @@ export default function MainPage() {
   const t = useT();
   const [coins, setCoins] = useState<Map<string, CoinData>>(new Map());
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedExchange, setSelectedExchange] = useState<string>("빗썸 KRW");
+  const [selectedExchange, setSelectedExchange] = useState<string>("업비트 KRW");
   const [selectedSymbol, setSelectedSymbol] = useState<string>("BTC");
   const [sort, setSort] = useState<SortState>({ mode: "default" });
   const hasInitializedSelectedSymbolRef = useRef(false);
@@ -176,14 +146,16 @@ export default function MainPage() {
   const [bithumbConnectionStatus, setBithumbConnectionStatus] =
     useState<BithumbConnectionStatus>("idle");
   const bithumbConnectionStatusRef = useRef<BithumbConnectionStatus>("idle");
+  type CoinoneConnectionStatus = "idle" | "connecting" | "live" | "degraded";
+  const [coinoneConnectionStatus, setCoinoneConnectionStatus] =
+    useState<CoinoneConnectionStatus>("idle");
+  const coinoneConnectionStatusRef = useRef<CoinoneConnectionStatus>("idle");
   const [priceFlash, setPriceFlash] = useState<
     Map<string, "up" | "down" | null>
   >(new Map());
   const coinsRef = useRef<Map<string, CoinData>>(new Map());
-  const koreanExchangePricesRef = useRef<Map<string, number>>(new Map());
-  const koreanExchangeChangePercentRef = useRef<Map<string, number>>(new Map());
-  const koreanExchangeChangeAmountRef = useRef<Map<string, number>>(new Map());
-  const koreanExchangeTradeValueRef = useRef<Map<string, number>>(new Map());
+  /** 국내 거래소 티커 VM (업비트/빗썸/코인원 DTO → 통합 형식) */
+  const domesticTickersRef = useRef<Map<string, DomesticTickerVM>>(new Map());
   const domesticLastKeyRef = useRef<
     Map<string, { connId: number; ts: number; seq: number }>
   >(new Map()); // symbol -> last applied key
@@ -202,6 +174,8 @@ export default function MainPage() {
   /** lastTs 이후 경과 시간(ms), RAF 프레임 간 deltaTime으로 누적 */
   const coinsFlushThrottleAccRef = useRef(0);
   const triggerCoinsStateSyncRef = useRef<(() => void) | null>(null);
+  /** 거래소 전환 시 이전 비동기 응답이 refs에 쓰이는 것 방지 */
+  const currentExchangeRef = useRef<string | null>(null);
   // listingsCount is derivable from coins.size when needed
 
   // 환율 변경 콜백 메모이제이션
@@ -214,6 +188,7 @@ export default function MainPage() {
 
   // 기준 거래소 상장 목록 로드
   useEffect(() => {
+    const exchangeForThisLoad = selectedExchange;
     const loadListings = async () => {
       setIsInitialLoading(true);
       try {
@@ -226,7 +201,7 @@ export default function MainPage() {
             markets.map((m) => [m.market.split("-")[1], m.korean_name]),
           );
           // 업비트 마켓 코드 목록은 업비트 기준일 때만 필요
-          if (selectedExchange === "업비트 KRW") {
+          if (exchangeForThisLoad === "업비트 KRW") {
             upbitMarketsRef.current = markets.map((m) => m.market);
           }
         };
@@ -234,7 +209,7 @@ export default function MainPage() {
         // 빗썸도 한글명을 위해 업비트 마켓 목록을 "이름 사전"으로 재사용
         await ensureUpbitNameMap();
 
-        if (selectedExchange === "업비트 KRW") {
+        if (exchangeForThisLoad === "업비트 KRW") {
           // 업비트 기준: 이미 ensureUpbitNameMap()에서 name map이 채워짐.
           // markets 목록은 다시 불러오지 않고, upbitMarketsRef.current를 사용.
           const res = await fetch("/api/upbit/markets");
@@ -247,17 +222,16 @@ export default function MainPage() {
             const symbol = m.market.split("-")[1];
             map.set(symbol, { symbol, name: m.korean_name });
           }
+          if (currentExchangeRef.current !== exchangeForThisLoad) return;
           coinsRef.current = map;
           setCoins(map);
-        } else {
+          triggerCoinsStateSyncRef.current?.();
+        } else if (exchangeForThisLoad === "빗썸 KRW") {
           // 빗썸: ALL_KRW 티커 keys가 상장 목록 역할
           const res = await fetch("/api/bithumb/all-krw");
           if (!res.ok) throw new Error("Failed to fetch bithumb tickers");
           const json = await res.json();
-          const data = (json?.data ?? {}) as Record<
-            string,
-            BithumbTicker | string
-          >;
+          const data = (json?.data ?? {}) as Record<string, unknown>;
           const symbols = Object.keys(data).filter((k) => k !== "date");
           const map = new Map<string, CoinData>();
           for (const s of symbols) {
@@ -266,8 +240,31 @@ export default function MainPage() {
               name: upbitNameMapRef.current.get(s) ?? s,
             });
           }
+          if (currentExchangeRef.current !== exchangeForThisLoad) return;
           coinsRef.current = map;
           setCoins(map);
+          triggerCoinsStateSyncRef.current?.();
+        } else if (exchangeForThisLoad === "코인원 KRW") {
+          // 코인원: ticker_new/KRW 응답의 tickers 배열이 상장 목록
+          const res = await fetch("/api/coinone/all-krw");
+          if (!res.ok) throw new Error("Failed to fetch coinone tickers");
+          const json = await res.json();
+          const tickers = (json?.tickers ?? []) as Array<{
+            target_currency?: string;
+          }>;
+          const map = new Map<string, CoinData>();
+          for (const t of tickers) {
+            const symbol = t.target_currency?.toUpperCase?.() ?? t.target_currency;
+            if (!symbol) continue;
+            map.set(symbol, {
+              symbol,
+              name: upbitNameMapRef.current.get(symbol) ?? symbol,
+            });
+          }
+          if (currentExchangeRef.current !== exchangeForThisLoad) return;
+          coinsRef.current = map;
+          setCoins(map);
+          triggerCoinsStateSyncRef.current?.();
         }
 
         // 선택 코인 초기화
@@ -327,11 +324,17 @@ export default function MainPage() {
       setBithumbConnectionStatus("idle");
       bithumbConnectionStatusRef.current = "idle";
     }
-    koreanExchangePricesRef.current.clear();
-    koreanExchangeChangePercentRef.current.clear();
-    koreanExchangeChangeAmountRef.current.clear();
-    koreanExchangeTradeValueRef.current.clear();
+    if (selectedExchange !== "코인원 KRW") {
+      setCoinoneConnectionStatus("idle");
+      coinoneConnectionStatusRef.current = "idle";
+    }
+    domesticTickersRef.current.clear();
     domesticLastKeyRef.current.clear();
+
+    // 거래소 전환 시 이전 리스트까지 비우고, loadListings가 새 목록을 채울 때까지 대기
+    coinsRef.current = new Map();
+    setCoins(new Map());
+    currentExchangeRef.current = selectedExchange;
 
     const shouldApply = (
       symbol: string,
@@ -348,7 +351,7 @@ export default function MainPage() {
     const countMissingDomesticPrices = () => {
       let n = 0;
       for (const s of coinsRef.current.keys()) {
-        if (!koreanExchangePricesRef.current.has(s)) n++;
+        if (!domesticTickersRef.current.has(s)) n++;
       }
       return n;
     };
@@ -357,26 +360,22 @@ export default function MainPage() {
     const canStopRestFallbackWhileWsLive = () =>
       coinsRef.current.size > 0 && countMissingDomesticPrices() === 0;
 
-    // 거래소 전환 시 이전 거래소 값이 남아 보이는(stale) 현상 방지
-    // 국내 거래소 기준 필드는 즉시 초기화하고, 새 데이터 수신 후 채운다.
-    const clearedCoins = new Map(coinsRef.current);
-    clearedCoins.forEach((coin, symbol) => {
-      clearedCoins.set(symbol, {
-        ...coin,
-        koreanPrice: undefined,
-        korp: undefined,
-        domesticChangePercent: undefined,
-        domesticChangeAmount: undefined,
-        domesticTradeValueKrw: undefined,
-      });
-    });
-    coinsRef.current = clearedCoins;
-    setCoins(clearedCoins);
+    /** VM을 domesticTickersRef에 병합하고 가격 변동 플래시 처리 */
+    const applyDomesticTicker = (
+      symbol: string,
+      vm: DomesticTickerVM,
+      incoming: { connId: number; ts: number; seq: number },
+    ) => {
+      if (!shouldApply(symbol, incoming)) return;
+      domesticLastKeyRef.current.set(symbol, incoming);
+      const existing = domesticTickersRef.current.get(symbol);
+      const prevPrice = existing?.price;
+      handlePriceChange(symbol, vm.price, prevPrice, setPriceFlash);
+      const merged = mergeDomesticTickerVM(existing, vm);
+      domesticTickersRef.current.set(symbol, merged);
+    };
 
-    let upbitWorker: Worker | null = null;
-    let bithumbWorker: Worker | null = null;
-    let upbitFallbackTimer: NodeJS.Timeout | null = null;
-    let bithumbFallbackTimer: NodeJS.Timeout | null = null;
+    let cleanupDomesticExchange: (() => void) | null = null;
 
     const snapshotFromMergedMap = (m: Map<string, CoinData>) => {
       const parts: string[] = [];
@@ -390,13 +389,11 @@ export default function MainPage() {
     const mergeRefsToCoinsMap = () => {
       const updatedCoins = new Map(coinsRef.current);
       updatedCoins.forEach((coin, symbol) => {
-        const koreanPrice = koreanExchangePricesRef.current.get(symbol);
-        const domesticChangePercent =
-          koreanExchangeChangePercentRef.current.get(symbol);
-        const domesticChangeAmount =
-          koreanExchangeChangeAmountRef.current.get(symbol);
-        const domesticTradeValueKrw =
-          koreanExchangeTradeValueRef.current.get(symbol);
+        const ticker = domesticTickersRef.current.get(symbol);
+        const koreanPrice = ticker?.price;
+        const domesticChangePercent = ticker?.changePercent;
+        const domesticChangeAmount = ticker?.changeAmount;
+        const domesticTradeValueKrw = ticker?.tradeValueKrw;
         const globalPriceUsdt = binancePricesRef.current.get(symbol);
         const globalKrw =
           globalPriceUsdt !== undefined
@@ -473,7 +470,8 @@ export default function MainPage() {
     };
     triggerCoinsStateSyncRef.current = markCoinsFlushDirty;
 
-    coinsFlushSnapshotRef.current = snapshotFromMergedMap(clearedCoins);
+    const initialMerged = mergeRefsToCoinsMap();
+    coinsFlushSnapshotRef.current = snapshotFromMergedMap(initialMerged);
     coinsFlushLastTsRef.current = performance.now();
     coinsFlushThrottleAccRef.current = 0;
     coinsFlushRafPrevTimeRef.current = null;
@@ -491,545 +489,52 @@ export default function MainPage() {
 
     const connectKoreanExchangeWebSocket = () => {
       try {
+        const baseDeps = {
+          selectedExchange,
+          currentExchangeRef,
+          isDomesticReadyRef,
+          setIsDomesticReady,
+          coinsRef,
+          upbitMarketsRef,
+          applyDomesticTicker,
+          markCoinsFlushDirty,
+          canStopRestFallbackWhileWsLive,
+          logThrottled,
+          exchangeLoadingStartTimeRef,
+          setShowExchangeLoading,
+          hideLoadingAfterMinTime,
+        };
+
         if (selectedExchange === "업비트 KRW") {
-          setUpbitConnectionStatus("connecting");
-          upbitConnectionStatusRef.current = "connecting";
-          console.log("[Upbit] WS connecting…");
-          hideLoadingAfterMinTime(
-            exchangeLoadingStartTimeRef,
-            setShowExchangeLoading,
-          );
-
-          const ensureUpbitMarkets = async () => {
-            if (upbitMarketsRef.current.length) return;
-            try {
-              const res = await fetch("/api/upbit/markets");
-              if (!res.ok) return;
-              const arr = (await res.json()) as { market: string }[];
-              upbitMarketsRef.current = arr
-                .map((m) => m.market)
-                .filter((m) => typeof m === "string");
-            } catch {
-              // ignore
-            }
-          };
-
-          // Ensure markets are ready BEFORE starting WS (avoid starting with empty list).
-          // If it still fails, REST fallback will take over.
-          void ensureUpbitMarkets();
-
-          // WS in Web Worker
-          upbitWorker = new Worker(
+          cleanupDomesticExchange = setupDomesticExchangeConnection(
+            "upbit",
             new URL("./upbit-ticker.worker.ts", import.meta.url),
+            {
+              ...baseDeps,
+              statusRef: upbitConnectionStatusRef,
+              setStatus: setUpbitConnectionStatus,
+            },
           );
-          upbitWorker.onmessage = (ev: MessageEvent) => {
-            const msg = ev.data as
-              | {
-                  type: "tick";
-                  data: {
-                    market: string;
-                    connId: number;
-                    ts: number;
-                    seq: number;
-                    tradePrice: number;
-                    signedChangeRate: number;
-                    signedChangePrice: number;
-                    accTradePrice24h: number;
-                  };
-                }
-              | {
-                  type:
-                    | "open"
-                    | "close"
-                    | "error"
-                    | "reconnect_failed";
-                  message?: string;
-                };
-
-            if (msg.type === "open") {
-              setUpbitConnectionStatus("live");
-              upbitConnectionStatusRef.current = "live";
-              console.log("[Upbit] WS live (worker open)");
-              return;
-            }
-            if (msg.type === "close" || msg.type === "error") {
-              // WS가 닫히거나 에러가 나면 REST fallback을 사용(있다면).
-              // isDomesticReady가 이미 true면 "live" 유지, 아니면 degraded로 표시한다.
-              if (!isDomesticReadyRef.current) {
-                setUpbitConnectionStatus("degraded");
-                upbitConnectionStatusRef.current = "degraded";
-              }
-              console.warn(
-                `[Upbit] WS ${msg.type} -> degraded (fallback eligible)`,
-                msg.message ? { message: msg.message } : undefined,
-              );
-              return;
-            }
-            if (msg.type === "reconnect_failed") {
-              setUpbitConnectionStatus("degraded");
-              upbitConnectionStatusRef.current = "degraded";
-              console.warn("[Upbit] WS reconnect_failed -> start REST fallback");
-              startUpbitAdaptiveFallback();
-              return;
-            }
-            if (msg.type === "tick") {
-              const marketCode = msg.data.market;
-              const symbol = marketCode.split("-")[1];
-              if (!symbol) return;
-              const price = msg.data.tradePrice;
-              if (typeof price !== "number" || !Number.isFinite(price)) return;
-              const incoming = {
-                connId: msg.data.connId ?? 1,
-                ts: msg.data.ts ?? Date.now(),
-                seq: msg.data.seq ?? 0,
-              };
-              if (!shouldApply(symbol, incoming)) return;
-              domesticLastKeyRef.current.set(symbol, incoming);
-              const prevPrice = koreanExchangePricesRef.current.get(symbol);
-              handlePriceChange(symbol, price, prevPrice, setPriceFlash);
-
-              koreanExchangePricesRef.current.set(symbol, price);
-              koreanExchangeChangePercentRef.current.set(
-                symbol,
-                msg.data.signedChangeRate * 100,
-              );
-              koreanExchangeChangeAmountRef.current.set(
-                symbol,
-                msg.data.signedChangePrice,
-              );
-              koreanExchangeTradeValueRef.current.set(
-                symbol,
-                msg.data.accTradePrice24h,
-              );
-
-              setIsDomesticReady(true);
-              isDomesticReadyRef.current = true;
-              markCoinsFlushDirty();
-            }
-          };
-          // If the list is empty right now, wait briefly for ensureUpbitMarkets()
-          // then start the worker with a fresh list.
-          const startUpbitWorker = async () => {
-            await ensureUpbitMarkets();
-            const fresh = upbitMarketsRef.current.filter((m) =>
-              m.startsWith("KRW-"),
-            );
-            if (!fresh.length) {
-              console.warn(
-                "[Upbit] WS skipped: empty markets list (will rely on REST fallback)",
-              );
-              return;
-            }
-            upbitWorker?.postMessage({ type: "start", markets: fresh });
-          };
-          void startUpbitWorker();
-
-          // If WS doesn't deliver quickly, start adaptive fallback polling.
-          let upbitBackoffMs = 800;
-          const fetchFallbackOnce = async () => {
-            try {
-              const upbitKrwMarkets = upbitMarketsRef.current.filter((m) =>
-                m.startsWith("KRW-"),
-              );
-              if (!upbitKrwMarkets.length) {
-                await ensureUpbitMarkets();
-              }
-              const freshMarkets = upbitMarketsRef.current.filter((m) =>
-                m.startsWith("KRW-"),
-              );
-              if (!freshMarkets.length) {
-                logThrottled(
-                  "upbit_fallback_skip_empty_markets",
-                  "[Upbit] REST fallback skipped: empty markets list",
-                );
-                return;
-              }
-
-              logThrottled(
-                "upbit_fallback_fetch",
-                `[Upbit] REST fallback fetch (markets=${freshMarkets.length})`,
-              );
-              const nowTs = Date.now();
-              let seq = 0;
-              const UPBIT_TICKER_CHUNK = 45;
-              for (let i = 0; i < freshMarkets.length; i += UPBIT_TICKER_CHUNK) {
-                const chunk = freshMarkets.slice(i, i + UPBIT_TICKER_CHUNK);
-                const marketsParam = chunk.join(",");
-                const res = await fetch(`/api/upbit?markets=${marketsParam}`);
-                if (!res.ok) {
-                  logThrottled(
-                    "upbit_fallback_http_error",
-                    `[Upbit] REST fallback HTTP ${res.status}`,
-                  );
-                  return;
-                }
-                const arr = (await res.json()) as UpbitTicker[];
-                for (const item of arr) {
-                  const marketCode = item.market ?? item.code;
-                  if (!marketCode) continue;
-                  const symbol = marketCode.split("-")[1];
-                  if (!symbol) continue;
-                  if (
-                    typeof item.trade_price !== "number" ||
-                    !Number.isFinite(item.trade_price)
-                  ) {
-                    continue;
-                  }
-                  const ts =
-                    (typeof item.trade_timestamp === "number" &&
-                      item.trade_timestamp) ||
-                    (typeof item.timestamp === "number" && item.timestamp) ||
-                    nowTs;
-                  seq += 1;
-                  const incoming = { connId: 0, ts, seq };
-                  if (!shouldApply(symbol, incoming)) continue;
-                  domesticLastKeyRef.current.set(symbol, incoming);
-                  koreanExchangePricesRef.current.set(symbol, item.trade_price);
-                  koreanExchangeChangePercentRef.current.set(
-                    symbol,
-                    item.signed_change_rate * 100,
-                  );
-                  koreanExchangeChangeAmountRef.current.set(
-                    symbol,
-                    item.signed_change_price,
-                  );
-                  koreanExchangeTradeValueRef.current.set(
-                    symbol,
-                    item.acc_trade_price_24h,
-                  );
-                }
-              }
-              setIsDomesticReady(true);
-              isDomesticReadyRef.current = true;
-              markCoinsFlushDirty();
-              setUpbitConnectionStatus((prev) => {
-                const next = prev === "live" ? "live" : "degraded";
-                upbitConnectionStatusRef.current = next;
-                return next;
-              });
-              // success -> reset backoff (keep adaptive)
-              upbitBackoffMs = 800;
-            } catch {
-              logThrottled(
-                "upbit_fallback_exception",
-                "[Upbit] REST fallback exception",
-              );
-              // ignore
-            }
-          };
-
-          const scheduleUpbitFallback = (delay: number) => {
-            if (upbitFallbackTimer) clearTimeout(upbitFallbackTimer);
-            logThrottled(
-              "upbit_fallback_schedule",
-              `[Upbit] REST fallback scheduled in ${delay}ms`,
-            );
-            upbitFallbackTimer = setTimeout(async () => {
-              if (selectedExchange !== "업비트 KRW") return;
-              if (
-                isDomesticReadyRef.current &&
-                upbitConnectionStatusRef.current === "live" &&
-                canStopRestFallbackWhileWsLive()
-              )
-                return logThrottled(
-                  "upbit_fallback_stop_ws_live",
-                  "[Upbit] REST fallback stopped: WS live + all listed symbols have domestic price",
-                );
-              await fetchFallbackOnce();
-              if (!isDomesticReadyRef.current) {
-                upbitBackoffMs = Math.min(5_000, upbitBackoffMs * 2);
-              } else {
-                upbitBackoffMs = Math.min(5_000, upbitBackoffMs * 1.25);
-              }
-              logThrottled(
-                "upbit_fallback_next_delay",
-                `[Upbit] REST fallback next backoff=${upbitBackoffMs}ms (ready=${isDomesticReadyRef.current})`,
-              );
-              scheduleUpbitFallback(upbitBackoffMs);
-            }, delay);
-          };
-
-          const startUpbitAdaptiveFallback = () => {
-            // start only once
-            if (upbitFallbackTimer) return;
-            console.warn("[Upbit] REST fallback started (adaptive)");
-            scheduleUpbitFallback(1500);
-          };
-
-          // WS가 먼저 살아도 저유동 종목은 틱이 늦을 수 있어, REST로 빈 종목을 채울 때까지 폴백 유지
-          setTimeout(() => {
-            if (selectedExchange !== "업비트 KRW") return;
-            startUpbitAdaptiveFallback();
-          }, 2500);
         } else if (selectedExchange === "빗썸 KRW") {
-          setBithumbConnectionStatus("connecting");
-          bithumbConnectionStatusRef.current = "connecting";
-          console.log("[Bithumb] WS connecting…");
-          hideLoadingAfterMinTime(
-            exchangeLoadingStartTimeRef,
-            setShowExchangeLoading,
-          );
-
-          bithumbWorker = new Worker(
+          cleanupDomesticExchange = setupDomesticExchangeConnection(
+            "bithumb",
             new URL("./bithumb-ticker.worker.ts", import.meta.url),
+            {
+              ...baseDeps,
+              statusRef: bithumbConnectionStatusRef,
+              setStatus: setBithumbConnectionStatus,
+            },
           );
-
-          bithumbWorker.onmessage = (ev: MessageEvent) => {
-            const msg = ev.data as
-              | {
-                  type: "tick";
-                  data: {
-                    symbol: string;
-                    connId: number;
-                    ts: number;
-                    seq: number;
-                    closePrice: number;
-                    changeRatePercent?: number;
-                    changeAmount?: number;
-                    tradeValueKrw?: number;
-                  };
-                }
-              | {
-                  type:
-                    | "open"
-                    | "close"
-                    | "error"
-                    | "reconnect_failed";
-                  message?: string;
-                };
-
-            if (msg.type === "open") {
-              setBithumbConnectionStatus("live");
-              bithumbConnectionStatusRef.current = "live";
-              console.log("[Bithumb] WS live (worker open)");
-              return;
-            }
-            if (msg.type === "close" || msg.type === "error") {
-              if (!isDomesticReadyRef.current) {
-                setBithumbConnectionStatus("degraded");
-                bithumbConnectionStatusRef.current = "degraded";
-              }
-              console.warn(
-                `[Bithumb] WS ${msg.type} -> degraded (fallback eligible)`,
-                msg.message ? { message: msg.message } : undefined,
-              );
-              return;
-            }
-            if (msg.type === "reconnect_failed") {
-              setBithumbConnectionStatus("degraded");
-              bithumbConnectionStatusRef.current = "degraded";
-              console.warn("[Bithumb] WS reconnect_failed -> start REST fallback");
-              startBithumbAdaptiveFallback();
-              return;
-            }
-            if (msg.type === "tick") {
-              const symbol = msg.data.symbol;
-              if (!symbol) return;
-              const close = msg.data.closePrice;
-              if (typeof close !== "number" || !Number.isFinite(close)) return;
-              const incoming = {
-                connId: msg.data.connId ?? 1,
-                ts: msg.data.ts ?? Date.now(),
-                seq: msg.data.seq ?? 0,
-              };
-              if (!shouldApply(symbol, incoming)) return;
-              domesticLastKeyRef.current.set(symbol, incoming);
-              const prevPrice = koreanExchangePricesRef.current.get(symbol);
-              handlePriceChange(symbol, close, prevPrice, setPriceFlash);
-              koreanExchangePricesRef.current.set(symbol, close);
-
-              if (typeof msg.data.changeRatePercent === "number") {
-                koreanExchangeChangePercentRef.current.set(
-                  symbol,
-                  msg.data.changeRatePercent,
-                );
-              }
-              if (typeof msg.data.changeAmount === "number") {
-                koreanExchangeChangeAmountRef.current.set(
-                  symbol,
-                  msg.data.changeAmount,
-                );
-              }
-              if (typeof msg.data.tradeValueKrw === "number") {
-                koreanExchangeTradeValueRef.current.set(
-                  symbol,
-                  msg.data.tradeValueKrw,
-                );
-              }
-
-              setIsDomesticReady(true);
-              isDomesticReadyRef.current = true;
-              markCoinsFlushDirty();
-            }
-          };
-
-          // coinsRef는 loadListings와 레이스할 수 있음(첫 진입 시 빈 Map).
-          // 업비트와 같이 심볼이 준비된 뒤에만 WS를 시작한다.
-          const ensureBithumbSymbols = async (): Promise<string[]> => {
-            const fromRef = Array.from(coinsRef.current.keys()).filter(Boolean);
-            if (fromRef.length) return fromRef;
-            try {
-              const res = await fetch("/api/bithumb/all-krw");
-              if (!res.ok) return [];
-              const json = (await res.json()) as {
-                data?: Record<string, unknown>;
-              };
-              const data = json.data ?? {};
-              return Object.keys(data).filter((k) => k !== "date");
-            } catch {
-              return [];
-            }
-          };
-
-          const startBithumbWorker = async () => {
-            const symbols = await ensureBithumbSymbols();
-            if (!symbols.length) {
-              console.warn(
-                "[Bithumb] WS skipped: empty symbols list (will rely on REST fallback)",
-              );
-              return;
-            }
-            bithumbWorker?.postMessage({ type: "start", symbols });
-          };
-          void startBithumbWorker();
-
-          // WS가 빠르게 안 오면 REST 폴백(adaptive)
-          let bithumbBackoffMs = 1200;
-          const fetchBithumbFallbackOnce = async () => {
-            try {
-              logThrottled(
-                "bithumb_fallback_fetch",
-                "[Bithumb] REST fallback fetch (/api/bithumb/all-krw)",
-              );
-              const response = await fetch("/api/bithumb/all-krw");
-              if (response.ok) {
-                const data = await response.json();
-                if (data.status === "0000" && data.data) {
-                  const rootTsRaw = (data?.data?.date ?? data?.date) as
-                    | string
-                    | number
-                    | undefined;
-                  const rootTsNum =
-                    typeof rootTsRaw === "number"
-                      ? rootTsRaw
-                      : typeof rootTsRaw === "string"
-                        ? Number.parseInt(rootTsRaw, 10)
-                        : undefined;
-                  const rootTs =
-                    typeof rootTsNum === "number" && Number.isFinite(rootTsNum)
-                      ? rootTsNum < 10_000_000_000
-                        ? rootTsNum * 1000
-                        : rootTsNum
-                      : Date.now();
-                  const tickers = data.data as Record<string, BithumbTicker>;
-                  let seq = 0;
-                  for (const [symbol, ticker] of Object.entries(tickers)) {
-                    if (symbol === "date") continue;
-                    seq += 1;
-                    const incoming = { connId: 0, ts: rootTs, seq };
-                    if (!shouldApply(symbol, incoming)) continue;
-                    domesticLastKeyRef.current.set(symbol, incoming);
-                    const close = parseFloat(ticker.closing_price);
-                    const prevClose = parseFloat(ticker.prev_closing_price);
-                    const prevPrice =
-                      koreanExchangePricesRef.current.get(symbol);
-
-                    handlePriceChange(symbol, close, prevPrice, setPriceFlash);
-                    if (Number.isFinite(close)) {
-                      koreanExchangePricesRef.current.set(symbol, close);
-                    }
-
-                    if (
-                      Number.isFinite(close) &&
-                      Number.isFinite(prevClose) &&
-                      prevClose !== 0
-                    ) {
-                      const changeAmount = close - prevClose;
-                      const changePercent = (changeAmount / prevClose) * 100;
-                      koreanExchangeChangeAmountRef.current.set(
-                        symbol,
-                        changeAmount,
-                      );
-                      koreanExchangeChangePercentRef.current.set(
-                        symbol,
-                        changePercent,
-                      );
-                    }
-
-                    const tradeValue = parseFloat(
-                      (ticker.acc_trade_value_24H ??
-                        ticker.acc_trade_value) as string,
-                    );
-                    if (Number.isFinite(tradeValue)) {
-                      koreanExchangeTradeValueRef.current.set(
-                        symbol,
-                        tradeValue,
-                      );
-                    }
-                  }
-                  setIsDomesticReady(true);
-                  isDomesticReadyRef.current = true;
-                  markCoinsFlushDirty();
-                  setBithumbConnectionStatus((prev) => {
-                    const next = prev === "live" ? "live" : "degraded";
-                    bithumbConnectionStatusRef.current = next;
-                    return next;
-                  });
-                  // Do NOT reset backoff on success while WS isn't live.
-                  // Let scheduleBithumbFallback() adapt (and cap at 5s) to reduce log/network spam.
-                }
-              } else {
-                logThrottled(
-                  "bithumb_fallback_http_error",
-                  `[Bithumb] REST fallback HTTP ${response.status}`,
-                );
-              }
-            } catch (error) {
-              console.error("Error fetching Bithumb data:", error);
-            }
-          };
-
-          const scheduleBithumbFallback = (delay: number) => {
-            if (bithumbFallbackTimer) clearTimeout(bithumbFallbackTimer);
-            logThrottled(
-              "bithumb_fallback_schedule",
-              `[Bithumb] REST fallback scheduled in ${delay}ms`,
-            );
-            bithumbFallbackTimer = setTimeout(async () => {
-              if (selectedExchange !== "빗썸 KRW") return;
-              if (
-                isDomesticReadyRef.current &&
-                bithumbConnectionStatusRef.current === "live" &&
-                canStopRestFallbackWhileWsLive()
-              )
-                return logThrottled(
-                  "bithumb_fallback_stop_ws_live",
-                  "[Bithumb] REST fallback stopped: WS live + all listed symbols have domestic price",
-                );
-              await fetchBithumbFallbackOnce();
-              if (!isDomesticReadyRef.current) {
-                bithumbBackoffMs = Math.min(5_000, bithumbBackoffMs * 2);
-              } else {
-                bithumbBackoffMs = Math.min(5_000, bithumbBackoffMs * 1.25);
-              }
-              logThrottled(
-                "bithumb_fallback_next_delay",
-                `[Bithumb] REST fallback next backoff=${bithumbBackoffMs}ms (ready=${isDomesticReadyRef.current})`,
-              );
-              scheduleBithumbFallback(bithumbBackoffMs);
-            }, delay);
-          };
-
-          const startBithumbAdaptiveFallback = () => {
-            if (bithumbFallbackTimer) return;
-            console.warn("[Bithumb] REST fallback started (adaptive)");
-            scheduleBithumbFallback(1500);
-          };
-
-          setTimeout(() => {
-            if (selectedExchange !== "빗썸 KRW") return;
-            startBithumbAdaptiveFallback();
-          }, 2500);
+        } else if (selectedExchange === "코인원 KRW") {
+          cleanupDomesticExchange = setupDomesticExchangeConnection(
+            "coinone",
+            new URL("./coinone-ticker.worker.ts", import.meta.url),
+            {
+              ...baseDeps,
+              statusRef: coinoneConnectionStatusRef,
+              setStatus: setCoinoneConnectionStatus,
+            },
+          );
         }
       } catch (error) {
         console.error("Korean Exchange WebSocket 연결 실패:", error);
@@ -1050,20 +555,9 @@ export default function MainPage() {
       coinsFlushRafPendingRef.current = false;
       coinsFlushRafPrevTimeRef.current = null;
       triggerCoinsStateSyncRef.current = null;
-      if (upbitFallbackTimer) clearTimeout(upbitFallbackTimer);
-      if (bithumbFallbackTimer) clearTimeout(bithumbFallbackTimer);
-      if (upbitWorker) {
-        try {
-          upbitWorker.postMessage({ type: "stop" });
-        } catch {}
-        upbitWorker.terminate();
-      }
-      if (bithumbWorker) {
-        try {
-          bithumbWorker.postMessage({ type: "stop" });
-        } catch {}
-        bithumbWorker.terminate();
-      }
+      cleanupDomesticExchange?.();
+      cleanupDomesticExchange = null;
+      currentExchangeRef.current = null;
     };
   }, [selectedExchange, usdtToKrwRateRef]);
 
@@ -1208,8 +702,9 @@ export default function MainPage() {
                       onChange={(e) => setSelectedExchange(e.target.value)}
                       className="shrink-0 rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[13px] text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                     >
-                      <option value="빗썸 KRW">빗썸 KRW</option>
                       <option value="업비트 KRW">업비트 KRW</option>
+                      <option value="빗썸 KRW">빗썸 KRW</option>
+                      <option value="코인원 KRW">코인원 KRW</option>
                     </select>
                   </div>
 
@@ -1272,6 +767,7 @@ export default function MainPage() {
                 selectedExchange={selectedExchange}
                 upbitConnectionStatus={upbitConnectionStatus}
                 bithumbConnectionStatus={bithumbConnectionStatus}
+                coinoneConnectionStatus={coinoneConnectionStatus}
                 coins={filteredCoins.map((coin) => ({
                   symbol: coin.symbol,
                   name: coin.name,

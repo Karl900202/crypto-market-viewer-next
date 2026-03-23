@@ -1,8 +1,8 @@
 ## KorP
 
-KorP는 **국내 거래소(업비트/빗썸) 시세**와 **글로벌(Binance USDT) 시세**를 한 화면에서 비교하고, 이를 기반으로 **KorP(Korean Premium)** 를 계산/표시하는 Next.js 앱입니다.
+KorP는 **국내 거래소(업비트/빗썸/코인원) 시세**와 **글로벌(Binance USDT) 시세**를 한 화면에서 비교하고, 이를 기반으로 **KorP(Korean Premium)** 를 계산/표시하는 Next.js 앱입니다.
 
-- **국내 기준 거래소**: 업비트(KRW) / 빗썸(KRW) 중 선택
+- **국내 기준 거래소**: 업비트(KRW) / 빗썸(KRW) / 코인원(KRW) 중 선택
 - **글로벌 기준**: Binance USDT 마켓
 - **핵심 목표**: 실시간성을 유지하면서도, 연결 실패/지연 시에도 “신뢰할 수 있는 데이터”만 표시
 
@@ -32,9 +32,65 @@ npm run start
 
 프로젝트의 실시간 데이터 파이프라인은 다음 3가지로 구성됩니다.
 
-1. **Web Worker(WebSocket)**: 업비트/빗썸 WS 연결 + 메시지 파싱/정규화
+1. **Web Worker(WebSocket)**: 업비트/빗썸/코인원 WS 연결 + 메시지 파싱/정규화
 2. **Adaptive REST fallback polling**: WS가 지연/실패 시 REST로 안전망 가동 (고정 interval 없음)
 3. **정합성(최신성) 검증**: WS/REST 경합에서도 스테일 데이터가 최신을 덮지 않게 드랍
+
+## 국내 거래소 통합 분기 프로세스 (타임라인)
+
+업비트·빗썸·코인원은 **동일한 단일 진입점**으로 연결됩니다: `lib/setup-domestic-exchange-connection.ts`  
+타이밍 상수는 `lib/domestic-exchange-timing.ts`의 `DOMESTIC_EXCHANGE_TIMING`에만 정의되어 있습니다.
+
+| 상수 | 값(ms) | 의미 |
+|------|--------|------|
+| `adaptiveFallbackAfterMs` | 2500 | 연결 직후, 이 시간이 지나면 “adaptive REST 폴백”을 **한 번만** 시작할 수 있음 |
+| `fallbackFirstScheduleMs` | 1500 | 폴백이 시작되면 **첫 REST 요청**까지의 지연 |
+| `restBackoffInitialMs` | 800 | REST 성공 시 백오프를 이 값 근처로 리셋 |
+| `restBackoffMaxMs` | 5000 | REST 폴링 간격 백오프 상한 |
+
+### 타임라인 (T = 기준 거래소 선택 후 `setupDomesticExchangeConnection` 실행 시각)
+
+```text
+T+0
+  ├─ 상태: connecting
+  ├─ Web Worker 생성 → 해당 거래소 WS 연결 시도
+  ├─ (업비트) KRW 마켓 목록 확보 후 구독 / (빗썸·코인원) 심볼 목록 확보 후 구독
+  └─ 심볼·마켓 목록이 비면 WS는 스킵하고 즉시 REST 폴백만 시작 (아래 “예외” 참고)
+
+T+~ (비동기, 수 ms~수백 ms)
+  ├─ Worker `open` → 연결 상태 live (가능한 한 빨리)
+  └─ `tick` 수신 시마다: DTO → DomesticTickerVM → `applyDomesticTicker` → 국내 시세 UI 반영
+
+T+2500ms
+  └─ 아직 adaptive 폴백이 시작되지 않았다면 `startAdaptiveFallback()` 1회
+      (이미 `reconnect_failed` 등으로 폴백이 켜졌으면 중복 시작 안 함)
+
+T+2500 + 1500 (= T+4000ms) — 일반 경로
+  └─ 첫 REST 폴링 1회 실행 (업비트 청크 / 빗썸 ALL_KRW / 코인원 ticker_new)
+
+이후 (REST 루프)
+  ├─ 매 요청 끝마다 백오프 갱신: 미준비 시 ×2(상한 5000ms), 준비됨 시 ×1.25(상한 5000ms)
+  ├─ 다음 REST는 `backoffMs` 후에 다시 스케줄
+  └─ **중단 조건**: 국내 데이터 준비됨 + WS가 live + 상장된 **모든** 심볼에 국내 가격이 찼을 때
+      (`canStopRestFallbackWhileWsLive`) → 더 이상 REST 스케줄하지 않음
+```
+
+### 예외·분기 (같은 모듈 안에서 처리)
+
+- **`reconnect_failed` (Worker가 WS 재연결 포기)**  
+  → 즉시 `startAdaptiveFallback()` → **약 T+1500ms**에 첫 REST (이때는 2500ms 대기 없음).
+
+- **구독할 심볼/마켓이 비어 WS를 시작하지 못한 경우**  
+  → 즉시 `startAdaptiveFallback()` → **약 T+1500ms**에 첫 REST.
+
+- **거래소 전환 / effect cleanup**  
+  → `cleanup()` 한 번으로 Worker 종료 + REST 타이머 정리 + `currentExchangeRef`로 이전 응답 무시.
+
+### VM·파일 맵
+
+- DTO → 통합 VM: `lib/domestic-ticker-vm.ts`
+- 연결 오케스트레이션: `lib/setup-domestic-exchange-connection.ts`
+- 페이지에서 분기: `app/(market)/main/page.tsx` — 선택 거래소에 따라 위 모듈에 `workerUrl`·상태 setter만 넘김
 
 ## 환율 & 글로벌(Binance) 시세 환산
 
@@ -82,10 +138,11 @@ KorP = \frac{KRW*{domestic} - KRW*{global}}{KRW\_{global}} \times 100
 
 - `app/(market)/main/upbit-ticker.worker.ts`
 - `app/(market)/main/bithumb-ticker.worker.ts`
+- `app/(market)/main/coinone-ticker.worker.ts`
 
 ## WS → REST fallback 전략
 
-국내 거래소(업비트/빗썸) 데이터는 우선 WS로 받습니다. 다만 환경/네트워크에 따라 WS가 지연되거나 끊길 수 있으므로, 일정 조건에서 **REST 폴백**을 동작시킵니다.
+국내 거래소(업비트/빗썸/코인원) 데이터는 우선 WS로 받습니다. 다만 환경/네트워크에 따라 WS가 지연되거나 끊길 수 있으므로, 일정 조건에서 **REST 폴백**을 동작시킵니다.
 
 ### 1) WS
 
@@ -104,6 +161,7 @@ REST 프록시(브라우저 CORS/차단 회피):
 
 - 업비트: `app/api/upbit/route.ts` (ticker proxy), `app/api/upbit/markets/route.ts` (market list)
 - 빗썸: `app/api/bithumb/all-krw/route.ts` (ALL_KRW proxy)
+- 코인원: `app/api/coinone/all-krw/route.ts` (ticker_new/KRW proxy)
 - 바이낸스: `app/api/binance/prices/route.ts`
 
 ## 정합성(최신성) 문제 해결

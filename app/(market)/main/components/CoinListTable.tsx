@@ -38,6 +38,7 @@ export type CoinListTableProps = {
   selectedExchange: string;
   upbitConnectionStatus: "idle" | "connecting" | "live" | "degraded";
   bithumbConnectionStatus: "idle" | "connecting" | "live" | "degraded";
+  coinoneConnectionStatus: "idle" | "connecting" | "live" | "degraded";
   coins: CoinView[];
   selectedSymbol: string;
   priceFlash: Map<string, PriceFlashDir>;
@@ -129,6 +130,7 @@ export const CoinListTable = memo(function CoinListTable(props: CoinListTablePro
     selectedExchange,
     upbitConnectionStatus,
     bithumbConnectionStatus,
+    coinoneConnectionStatus,
     coins,
     selectedSymbol,
     priceFlash,
@@ -259,6 +261,45 @@ export const CoinListTable = memo(function CoinListTable(props: CoinListTablePro
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium text-gray-900 dark:text-white">
                     {bithumbConnectionStatus === "degraded"
+                      ? t("market.connectionFailed")
+                      : t("market.connectionPending")}
+                  </div>
+                  <div className="mt-1 text-xs text-gray-600 dark:text-gray-400">
+                    {t("market.staleDataHidden")}
+                  </div>
+                </div>
+
+                <div className="shrink-0 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                  {t("market.connectionPending")}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : selectedExchange === "코인원 KRW" ? (
+          <div className="p-4">
+            <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-3">
+              <div className="flex items-start gap-3">
+                <div
+                  className={`mt-0.5 shrink-0 ${
+                    coinoneConnectionStatus === "connecting"
+                      ? "text-yellow-500"
+                      : coinoneConnectionStatus === "degraded"
+                        ? "text-orange-500"
+                        : "text-gray-400"
+                  }`}
+                  aria-hidden="true"
+                >
+                  <svg viewBox="0 0 24 24" width="18" height="18">
+                    <path
+                      fill="currentColor"
+                      d="M12 6V3L8 7l4 4V8c2.76 0 5 2.24 5 5a5 5 0 0 1-8.66 3.54l-1.42 1.42A7 7 0 1 0 12 6z"
+                    />
+                  </svg>
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-gray-900 dark:text-white">
+                    {coinoneConnectionStatus === "degraded"
                       ? t("market.connectionFailed")
                       : t("market.connectionPending")}
                   </div>
