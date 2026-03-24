@@ -103,7 +103,7 @@ export const CoinRow = memo(
           </div>
 
           <div
-            className={`${COIN_LIST_ROW_CELL_CLASS} text-right tabular-nums border border-transparent box-border px-2 py-0.5 ${
+            className={`${COIN_LIST_ROW_CELL_CLASS} w-full items-end text-right tabular-nums border border-transparent box-border px-2 py-0.5 ${
               flash ? "animate-price-border-flash" : ""
             }`}
           >

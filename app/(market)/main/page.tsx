@@ -8,6 +8,7 @@ import {
   domesticTickerVmSnapshot,
   mergeDomesticTickerVM,
 } from "@/lib/domestic-ticker-vm";
+import { domesticExchangeWorkerUrls } from "@/lib/domestic-exchange-worker-urls";
 import { setupDomesticExchangeConnection } from "@/lib/setup-domestic-exchange-connection";
 import { getCoinEnglishDisplayName } from "@/lib/coin-english-display-name";
 import type { NameColumnMode } from "@/lib/name-column-mode";
@@ -150,7 +151,8 @@ export default function MainPage() {
     useState<string>("업비트 KRW");
   const [selectedSymbol, setSelectedSymbol] = useState<string>("BTC");
   const [sort, setSort] = useState<SortState>({ mode: "default" });
-  const [nameColumnMode, setNameColumnMode] = useState<NameColumnMode>("korean");
+  const [nameColumnMode, setNameColumnMode] =
+    useState<NameColumnMode>("korean");
   const hasInitializedSelectedSymbolRef = useRef(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const exchangeLoadingStartTimeRef = useRef<number | null>(null);
@@ -524,7 +526,7 @@ export default function MainPage() {
         if (selectedExchange === "업비트 KRW") {
           cleanupDomesticExchange = setupDomesticExchangeConnection(
             "upbit",
-            new URL("./upbit-ticker.worker.js", import.meta.url),
+            domesticExchangeWorkerUrls.upbit,
             {
               ...baseDeps,
               statusRef: upbitConnectionStatusRef,
@@ -534,7 +536,7 @@ export default function MainPage() {
         } else if (selectedExchange === "빗썸 KRW") {
           cleanupDomesticExchange = setupDomesticExchangeConnection(
             "bithumb",
-            new URL("./bithumb-ticker.worker.js", import.meta.url),
+            domesticExchangeWorkerUrls.bithumb,
             {
               ...baseDeps,
               statusRef: bithumbConnectionStatusRef,
@@ -544,7 +546,7 @@ export default function MainPage() {
         } else if (selectedExchange === "코인원 KRW") {
           cleanupDomesticExchange = setupDomesticExchangeConnection(
             "coinone",
-            new URL("./coinone-ticker.worker.js", import.meta.url),
+            domesticExchangeWorkerUrls.coinone,
             {
               ...baseDeps,
               statusRef: coinoneConnectionStatusRef,
@@ -644,13 +646,13 @@ export default function MainPage() {
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="flex min-w-0 items-center gap-2">
-                    <span className="shrink-0 text-[13px] text-gray-500 dark:text-gray-400">
+                    <span className="shrink-0 text-[14px] text-gray-500 dark:text-gray-400">
                       {t("market.baseExchange")}
                     </span>
                     <select
                       value={selectedExchange}
                       onChange={(e) => setSelectedExchange(e.target.value)}
-                      className="shrink-0 rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[13px] text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                      className="shrink-0 rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[14px] text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                     >
                       <option value="업비트 KRW">업비트 KRW</option>
                       <option value="빗썸 KRW">빗썸 KRW</option>
@@ -659,7 +661,7 @@ export default function MainPage() {
                   </div>
 
                   <div
-                    className="mt-1.5 pt-2 text-[13px] leading-snug text-gray-500 dark:text-gray-400"
+                    className="mt-1.5 pt-2 text-[14px] leading-snug text-gray-500 dark:text-gray-400"
                     title={t("market.globalReferenceHint")}
                   >
                     <span className="text-gray-500 dark:text-gray-400">
@@ -674,7 +676,7 @@ export default function MainPage() {
                   </div>
                 </div>
 
-                <span className="shrink-0 text-[13px] text-gray-500 dark:text-gray-400">
+                <span className="shrink-0 text-[14px] text-gray-500 dark:text-gray-400">
                   {t("market.totalCoins", { count: coins.size })}
                 </span>
               </div>

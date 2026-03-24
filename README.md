@@ -137,11 +137,12 @@ KorP = \frac{KRW*{domestic} - KRW*{global}}{KRW\_{global}} \times 100
 
 관련 파일:
 
-- `app/(market)/main/upbit-ticker.worker.js`
-- `app/(market)/main/bithumb-ticker.worker.js`
-- `app/(market)/main/coinone-ticker.worker.js`
+- `workers/domestic-exchange/upbit-ticker.worker.js`
+- `workers/domestic-exchange/bithumb-ticker.worker.js`
+- `workers/domestic-exchange/coinone-ticker.worker.js`
+- 엔트리 URL: `lib/domestic-exchange-worker-urls.ts` → `app/(market)/main/page.tsx`에서 `new Worker(url)`에 전달
 
-(`.ts` 확장자로 번들하면 `/_next/static/media/*.ts` URL이 되어 브라우저가 MIME을 `video/mp2t`로 잡는 문제가 있어, 워커는 `.js`로 둡니다.)
+(`.ts` 확장자로 번들하면 `/_next/static/media/*.ts` URL이 되어 브라우저가 MIME을 `video/mp2t`로 잡는 문제가 있어, 워커는 `.js`로 둡니다. 라우트·페이지와 분리하려고 `app/` 밖 `workers/`에 둡니다.)
 
 ## WS → REST fallback 전략
 
