@@ -91,6 +91,7 @@ T+2500 + 1500 (= T+4000ms) — 일반 경로
 - DTO → 통합 VM: `lib/domestic-ticker-vm.ts`
 - 연결 오케스트레이션: `lib/setup-domestic-exchange-connection.ts`
 - 페이지에서 분기: `app/(market)/main/page.tsx` — 선택 거래소에 따라 위 모듈에 `workerUrl`·상태 setter만 넘김
+- 렌더용 `CoinData`는 국내 시세를 **필드 복제 없이** `domestic?: DomesticTickerVM` 한 덩어리로 보관하고, KorP·글로벌 USDT 가격만 별도 필드(`korp`, `globalPriceUsdt`)로 둡니다.
 
 ## 환율 & 글로벌(Binance) 시세 환산
 
@@ -136,9 +137,11 @@ KorP = \frac{KRW*{domestic} - KRW*{global}}{KRW\_{global}} \times 100
 
 관련 파일:
 
-- `app/(market)/main/upbit-ticker.worker.ts`
-- `app/(market)/main/bithumb-ticker.worker.ts`
-- `app/(market)/main/coinone-ticker.worker.ts`
+- `app/(market)/main/upbit-ticker.worker.js`
+- `app/(market)/main/bithumb-ticker.worker.js`
+- `app/(market)/main/coinone-ticker.worker.js`
+
+(`.ts` 확장자로 번들하면 `/_next/static/media/*.ts` URL이 되어 브라우저가 MIME을 `video/mp2t`로 잡는 문제가 있어, 워커는 `.js`로 둡니다.)
 
 ## WS → REST fallback 전략
 

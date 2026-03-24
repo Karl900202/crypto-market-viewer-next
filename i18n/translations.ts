@@ -17,6 +17,10 @@ export type TranslationKey =
   | "market.retryConnect"
   | "market.staleDataHidden"
   | "table.name"
+  | "table.nameHeaderKorean"
+  | "table.nameHeaderEnglish"
+  | "table.nameToggleToEnglish"
+  | "table.nameToggleToKorean"
   | "table.price"
   | "table.korp"
   | "table.change24h"
@@ -46,6 +50,10 @@ export const translations: Record<Locale, Record<TranslationKey, string>> = {
     "market.retryConnect": "재연결",
     "market.staleDataHidden": "이전 데이터는 숨겼어요. 재연결 후 표시됩니다.",
     "table.name": "한글명",
+    "table.nameHeaderKorean": "한글명",
+    "table.nameHeaderEnglish": "영문명",
+    "table.nameToggleToEnglish": "영문명으로 전환",
+    "table.nameToggleToKorean": "한글명으로 전환",
     "table.price": "현재가",
     "table.korp": "KorP",
     "table.change24h": "전일대비",
@@ -75,6 +83,10 @@ export const translations: Record<Locale, Record<TranslationKey, string>> = {
     "market.retryConnect": "Reconnect",
     "market.staleDataHidden": "Previous data is hidden until reconnection.",
     "table.name": "Name",
+    "table.nameHeaderKorean": "Korean name",
+    "table.nameHeaderEnglish": "English name",
+    "table.nameToggleToEnglish": "Show English names",
+    "table.nameToggleToKorean": "Show Korean names",
     "table.price": "Price",
     "table.korp": "KorP",
     "table.change24h": "24h change",

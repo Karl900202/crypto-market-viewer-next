@@ -1,38 +1,38 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useExchangeRate } from "@/hooks/useExchangeRate";
 import { useT } from "@/hooks/useT";
 import {
   type DomesticTickerVM,
+  domesticTickerVmSnapshot,
   mergeDomesticTickerVM,
 } from "@/lib/domestic-ticker-vm";
 import { setupDomesticExchangeConnection } from "@/lib/setup-domestic-exchange-connection";
+import { getCoinEnglishDisplayName } from "@/lib/coin-english-display-name";
+import type { NameColumnMode } from "@/lib/name-column-mode";
+import { sortDisplayCoins } from "@/lib/coin-sort";
 import Loading from "./loading";
 import {
   CoinListTable,
   type SortKey,
   type SortState,
 } from "./components/CoinListTable";
-import { COIN_LIST_ROW_GRID_CLASS } from "./components/CoinRow";
+import { MarketListSkeletonRow } from "./components/MarketListSkeletonRow";
 
 interface CoinData {
   symbol: string;
   name: string;
-  // 국내 거래소 (기준 거래소) 데이터
-  koreanPrice?: number; // KRW 현재가
+  /** 국내 기준 거래소 티커 (VM과 동일 스키마) */
+  domestic?: DomesticTickerVM;
   korp?: number;
-  domesticChangePercent?: number; // 선택 국내 거래소 기준 전일대비(%)
-  domesticChangeAmount?: number; // 선택 국내 거래소 기준 전일대비(가격차, KRW)
-  domesticTradeValueKrw?: number; // 선택 국내 거래소 기준 거래대금(24H, KRW)
-
-  // 글로벌(바이낸스 USDT) 매칭 데이터 (없으면 undefined)
+  /** 글로벌(바이낸스 USDT) 매칭 가격 */
   globalPriceUsdt?: number;
 }
 
-/** 스냅샷/증분 갱신: 렌더에 쓰는 필드만 문자열로 비교 (snapshotFromMergedMap과 동일 규칙) */
+/** 스냅샷/증분 갱신: 렌더에 쓰는 필드만 문자열로 비교 */
 const coinDataSnapshotLine = (c: CoinData) =>
-  `${c.symbol}:${c.koreanPrice ?? ""}:${c.domesticChangePercent ?? ""}:${c.domesticChangeAmount ?? ""}:${c.domesticTradeValueKrw ?? ""}:${c.globalPriceUsdt ?? ""}:${c.korp ?? ""}`;
+  `${c.symbol}:${domesticTickerVmSnapshot(c.domestic)}:${c.globalPriceUsdt ?? ""}:${c.korp ?? ""}`;
 
 /** ref 병합 결과를 state에 넣을 때, 변경된 심볼만 Map을 갱신해 리렌더 범위를 줄인다. */
 function mergeIncrementalCoinsState(
@@ -50,7 +50,9 @@ function mergeIncrementalCoinsState(
   const next = new Map(prev);
   for (const [symbol, coin] of merged) {
     const old = prev.get(symbol)!;
-    if (coinDataSnapshotLine(old) !== coinDataSnapshotLine(coin)) {
+    const oldLine = coinDataSnapshotLine(old);
+    const newLine = coinDataSnapshotLine(coin);
+    if (oldLine !== newLine) {
       next.set(symbol, coin);
       changed = true;
     }
@@ -124,13 +126,31 @@ const calculateKorP = (
   return Number.isFinite(v) ? v : undefined;
 };
 
+function formatPrice(price: number) {
+  if (!Number.isFinite(price)) return "-";
+  const abs = Math.abs(price);
+  const maximumFractionDigits =
+    abs >= 1000 ? 0 : abs >= 1 ? 2 : abs >= 0.01 ? 4 : abs >= 0.0001 ? 6 : 8;
+  return price.toLocaleString("ko-KR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits,
+  });
+}
+
+function formatTradeValueInMillionsKrw(valueKrw: number) {
+  const millions = Math.round(valueKrw / 1_000_000);
+  return `${millions.toLocaleString("ko-KR")}백만`;
+}
+
 export default function MainPage() {
   const t = useT();
   const [coins, setCoins] = useState<Map<string, CoinData>>(new Map());
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedExchange, setSelectedExchange] = useState<string>("업비트 KRW");
+  const [selectedExchange, setSelectedExchange] =
+    useState<string>("업비트 KRW");
   const [selectedSymbol, setSelectedSymbol] = useState<string>("BTC");
   const [sort, setSort] = useState<SortState>({ mode: "default" });
+  const [nameColumnMode, setNameColumnMode] = useState<NameColumnMode>("korean");
   const hasInitializedSelectedSymbolRef = useRef(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const exchangeLoadingStartTimeRef = useRef<number | null>(null);
@@ -178,9 +198,11 @@ export default function MainPage() {
   const currentExchangeRef = useRef<string | null>(null);
   // listingsCount is derivable from coins.size when needed
 
-  // 환율 변경 콜백 메모이제이션
-  const handleRateChange = useCallback(() => {
-    // 글로벌 환산은 렌더링 시점에 계산하므로 여기서는 no-op
+  /** 환율 콜백에서 갱신 — 테이블 글로벌 KRW 열·useMemo deps용 (ref만 바뀌면 리렌더 없음) */
+  const [displayUsdtToKrw, setDisplayUsdtToKrw] = useState(1400);
+  const handleRateChange = useCallback((newRate: number) => {
+    setDisplayUsdtToKrw(newRate);
+    triggerCoinsStateSyncRef.current?.();
   }, []);
 
   // 실시간 환율 가져오기 (10초 마다 업데이트, useRef 사용)
@@ -254,7 +276,8 @@ export default function MainPage() {
           }>;
           const map = new Map<string, CoinData>();
           for (const t of tickers) {
-            const symbol = t.target_currency?.toUpperCase?.() ?? t.target_currency;
+            const symbol =
+              t.target_currency?.toUpperCase?.() ?? t.target_currency;
             if (!symbol) continue;
             map.set(symbol, {
               symbol,
@@ -389,27 +412,20 @@ export default function MainPage() {
     const mergeRefsToCoinsMap = () => {
       const updatedCoins = new Map(coinsRef.current);
       updatedCoins.forEach((coin, symbol) => {
-        const ticker = domesticTickersRef.current.get(symbol);
-        const koreanPrice = ticker?.price;
-        const domesticChangePercent = ticker?.changePercent;
-        const domesticChangeAmount = ticker?.changeAmount;
-        const domesticTradeValueKrw = ticker?.tradeValueKrw;
+        const domestic = domesticTickersRef.current.get(symbol);
         const globalPriceUsdt = binancePricesRef.current.get(symbol);
         const globalKrw =
           globalPriceUsdt !== undefined
             ? globalPriceUsdt * usdtToKrwRateRef.current
             : undefined;
         const korp =
-          koreanPrice !== undefined && globalKrw !== undefined
-            ? calculateKorP(koreanPrice, globalKrw)
+          domestic !== undefined && globalKrw !== undefined
+            ? calculateKorP(domestic.price, globalKrw)
             : undefined;
         updatedCoins.set(symbol, {
           ...coin,
-          koreanPrice,
+          domestic,
           korp,
-          domesticChangePercent,
-          domesticChangeAmount,
-          domesticTradeValueKrw,
           globalPriceUsdt,
         });
       });
@@ -508,7 +524,7 @@ export default function MainPage() {
         if (selectedExchange === "업비트 KRW") {
           cleanupDomesticExchange = setupDomesticExchangeConnection(
             "upbit",
-            new URL("./upbit-ticker.worker.ts", import.meta.url),
+            new URL("./upbit-ticker.worker.js", import.meta.url),
             {
               ...baseDeps,
               statusRef: upbitConnectionStatusRef,
@@ -518,7 +534,7 @@ export default function MainPage() {
         } else if (selectedExchange === "빗썸 KRW") {
           cleanupDomesticExchange = setupDomesticExchangeConnection(
             "bithumb",
-            new URL("./bithumb-ticker.worker.ts", import.meta.url),
+            new URL("./bithumb-ticker.worker.js", import.meta.url),
             {
               ...baseDeps,
               statusRef: bithumbConnectionStatusRef,
@@ -528,7 +544,7 @@ export default function MainPage() {
         } else if (selectedExchange === "코인원 KRW") {
           cleanupDomesticExchange = setupDomesticExchangeConnection(
             "coinone",
-            new URL("./coinone-ticker.worker.ts", import.meta.url),
+            new URL("./coinone-ticker.worker.js", import.meta.url),
             {
               ...baseDeps,
               statusRef: coinoneConnectionStatusRef,
@@ -561,8 +577,7 @@ export default function MainPage() {
     };
   }, [selectedExchange, usdtToKrwRateRef]);
 
-  const collator = new Intl.Collator("ko-KR", { sensitivity: "base" });
-  const toggleSort = (key: SortKey) => {
+  const toggleSort = useCallback((key: SortKey) => {
     setSort((prev) => {
       if (prev.mode === "default" || prev.key !== key) {
         return { mode: "custom", key, dir: "asc" };
@@ -572,85 +587,40 @@ export default function MainPage() {
       }
       return { mode: "default" };
     });
-  };
+  }, []);
 
-  const coinsArray = Array.from(coins.values());
-  const filteredCoins = coinsArray
-    .filter(
-      (coin) =>
-        coin.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        coin.symbol.toLowerCase().includes(searchQuery.toLowerCase()),
-    )
-    .sort((a, b) => {
-      const compareOptionalNumber = (
-        av: number | undefined,
-        bv: number | undefined,
-        dirMul: number,
-      ) => {
-        const aUndef = av === undefined || !Number.isFinite(av);
-        const bUndef = bv === undefined || !Number.isFinite(bv);
-        if (aUndef && bUndef) return 0;
-        if (aUndef) return 1; // undefined는 항상 아래
-        if (bUndef) return -1;
-        return (av - bv) * dirMul;
-      };
+  const toggleNameColumnMode = useCallback(() => {
+    setNameColumnMode((m) => (m === "korean" ? "english" : "korean"));
+  }, []);
 
-      if (sort.mode === "default") {
-        return compareOptionalNumber(
-          a.domesticTradeValueKrw,
-          b.domesticTradeValueKrw,
-          -1,
-        );
-      }
-
-      const dirMul = sort.dir === "asc" ? 1 : -1;
-
-      if (sort.key === "name") {
-        const an = a.name || a.symbol;
-        const bn = b.name || b.symbol;
-        return collator.compare(an, bn) * dirMul;
-      }
-      if (sort.key === "korp")
-        return compareOptionalNumber(a.korp, b.korp, dirMul);
-      if (sort.key === "price")
-        return compareOptionalNumber(a.koreanPrice, b.koreanPrice, dirMul);
-      if (sort.key === "change")
-        return compareOptionalNumber(
-          a.domesticChangePercent,
-          b.domesticChangePercent,
-          dirMul,
-        );
-      return compareOptionalNumber(
-        a.domesticTradeValueKrw,
-        b.domesticTradeValueKrw,
-        dirMul,
+  const filteredCoins = useMemo(() => {
+    const q = searchQuery.toLowerCase();
+    const coinsArray = Array.from(coins.values());
+    const filtered = coinsArray.filter((coin) => {
+      const en = getCoinEnglishDisplayName(coin.symbol).toLowerCase();
+      return (
+        coin.name.toLowerCase().includes(q) ||
+        coin.symbol.toLowerCase().includes(q) ||
+        en.includes(q)
       );
     });
+    return sortDisplayCoins(filtered, sort);
+  }, [coins, searchQuery, sort]);
 
-  const formatPrice = (price: number) => {
-    if (!Number.isFinite(price)) return "-";
-    const abs = Math.abs(price);
-    // Small-price coins (e.g. BTT 0.000524) need more precision.
-    const maximumFractionDigits =
-      abs >= 1000
-        ? 0
-        : abs >= 1
-          ? 2
-          : abs >= 0.01
-            ? 4
-            : abs >= 0.0001
-              ? 6
-              : 8;
-    return price.toLocaleString("ko-KR", {
-      minimumFractionDigits: 0,
-      maximumFractionDigits,
-    });
-  };
-
-  const formatTradeValueInMillionsKrw = (valueKrw: number) => {
-    const millions = Math.round(valueKrw / 1_000_000);
-    return `${millions.toLocaleString("ko-KR")}백만`;
-  };
+  const tableCoins = useMemo(
+    () =>
+      filteredCoins.map((coin) => ({
+        symbol: coin.symbol,
+        name: coin.name,
+        korp: coin.korp,
+        domestic: coin.domestic,
+        globalPriceKrw:
+          coin.globalPriceUsdt !== undefined
+            ? coin.globalPriceUsdt * displayUsdtToKrw
+            : undefined,
+      })),
+    [filteredCoins, displayUsdtToKrw],
+  );
 
   const onSelectSymbol = useCallback((symbol: string) => {
     setSelectedSymbol(symbol);
@@ -663,26 +633,6 @@ export default function MainPage() {
 
   const selectedCoin = coins.get(selectedSymbol) ?? filteredCoins[0];
   const selectedCoinSymbol = selectedCoin?.symbol ?? "BTC";
-
-  const SkeletonRow = ({ keyProp }: { keyProp: number }) => (
-    <div
-      key={keyProp}
-      className="border-b border-[#eef1f5] bg-white px-3 py-2 dark:border-gray-800"
-    >
-      <div className={COIN_LIST_ROW_GRID_CLASS}>
-        <div className="min-w-0">
-          <div className="h-3 w-28 bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
-          <div className="mt-1 h-2.5 w-12 bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
-        </div>
-        <div className="h-3 w-16 ml-auto bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
-        <div className="ml-1 flex justify-end">
-          <div className="h-3 w-10 bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
-        </div>
-        <div className="h-3 w-12 ml-auto bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
-        <div className="h-3 w-14 ml-auto bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
-      </div>
-    </div>
-  );
 
   return (
     <div className="h-full overflow-hidden bg-gray-100 text-gray-900 dark:bg-gray-950 dark:text-white">
@@ -760,7 +710,12 @@ export default function MainPage() {
               )}
 
               <CoinListTable
-                t={t as unknown as (key: string, params?: Record<string, string | number>) => string}
+                t={
+                  t as unknown as (
+                    key: string,
+                    params?: Record<string, string | number>,
+                  ) => string
+                }
                 sort={sort}
                 onToggleSort={toggleSort}
                 isDomesticReady={isDomesticReady}
@@ -768,25 +723,15 @@ export default function MainPage() {
                 upbitConnectionStatus={upbitConnectionStatus}
                 bithumbConnectionStatus={bithumbConnectionStatus}
                 coinoneConnectionStatus={coinoneConnectionStatus}
-                coins={filteredCoins.map((coin) => ({
-                  symbol: coin.symbol,
-                  name: coin.name,
-                  korp: coin.korp,
-                  koreanPrice: coin.koreanPrice,
-                  globalPriceKrw:
-                    coin.globalPriceUsdt !== undefined
-                      ? coin.globalPriceUsdt * usdtToKrwRateRef.current
-                      : undefined,
-                  domesticChangePercent: coin.domesticChangePercent,
-                  domesticChangeAmount: coin.domesticChangeAmount,
-                  domesticTradeValueKrw: coin.domesticTradeValueKrw,
-                }))}
+                coins={tableCoins}
                 selectedSymbol={selectedCoinSymbol}
                 priceFlash={priceFlash}
                 onSelect={onSelectSymbol}
                 formatPrice={formatPrice}
                 formatTradeValueInMillionsKrw={formatTradeValueInMillionsKrw}
-                SkeletonRow={SkeletonRow}
+                SkeletonRow={MarketListSkeletonRow}
+                nameColumnMode={nameColumnMode}
+                onToggleNameColumnMode={toggleNameColumnMode}
               />
             </div>
           </aside>
@@ -797,7 +742,11 @@ export default function MainPage() {
               <div className="flex shrink-0 items-center justify-between gap-4 px-5 py-4 ">
                 <div className="min-w-0">
                   <div className="truncate text-base font-semibold leading-tight">
-                    {selectedCoin?.name ?? selectedCoinSymbol}
+                    {selectedCoin
+                      ? nameColumnMode === "korean"
+                        ? selectedCoin.name
+                        : getCoinEnglishDisplayName(selectedCoin.symbol)
+                      : selectedCoinSymbol}
                   </div>
                   <div className="mt-0.5 truncate text-sm text-gray-500 dark:text-gray-400">
                     {selectedCoinSymbol}/KRW · {t("market.binanceUsdtMarket")}{" "}
@@ -809,14 +758,13 @@ export default function MainPage() {
                     {selectedExchange.replace(" KRW", "")} / GLOBAL
                   </div>
                   <div className="text-base font-semibold">
-                    {selectedCoin?.koreanPrice
-                      ? formatPrice(selectedCoin.koreanPrice)
+                    {selectedCoin?.domestic?.price !== undefined
+                      ? formatPrice(selectedCoin.domestic.price)
                       : "-"}{" "}
                     <span className="text-gray-500 dark:text-gray-400">·</span>{" "}
                     {selectedCoin?.globalPriceUsdt !== undefined
                       ? formatPrice(
-                          selectedCoin.globalPriceUsdt *
-                            usdtToKrwRateRef.current,
+                          selectedCoin.globalPriceUsdt * displayUsdtToKrw,
                         )
                       : "-"}
                   </div>

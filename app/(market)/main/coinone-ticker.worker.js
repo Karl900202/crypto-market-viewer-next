@@ -1,80 +1,26 @@
-export {};
-
-type StartMessage = {
-  type: "start";
-  symbols: string[]; // e.g. ["BTC", "ETH"] (base symbols)
-};
-
-type StopMessage = {
-  type: "stop";
-};
-
-type InMessage = StartMessage | StopMessage;
-
-/** Coinone WS TICKER data (DEFAULT format) */
-type CoinoneWsTickerData = {
-  quote_currency?: string;
-  target_currency?: string;
-  timestamp?: number;
-  quote_volume?: string;
-  first?: string;
-  last?: string;
-  [k: string]: unknown;
-};
-
-/** SHORT format field names */
-type CoinoneWsTickerDataShort = {
-  qc?: string;
-  tc?: string;
-  t?: number;
-  qv?: string;
-  fi?: string;
-  la?: string;
-  [k: string]: unknown;
-};
-
-type OutMessage =
-  | { type: "open" }
-  | { type: "close" }
-  | { type: "error"; message: string }
-  | { type: "reconnect_failed" }
-  | {
-      type: "tick";
-      data: {
-        symbol: string;
-        connId: number;
-        ts: number;
-        seq: number;
-        closePrice: number;
-        changeRatePercent?: number;
-        changeAmount?: number;
-        tradeValueKrw?: number;
-      };
-    };
-
-let ws: WebSocket | null = null;
-let reconnectTimer: number | null = null;
-let pingTimer: number | null = null;
-let currentSymbols: string[] = [];
+let ws = null;
+let reconnectTimer = null;
+let pingTimer = null;
+let currentSymbols = [];
 let consecutiveFailures = 0;
 let stopped = false;
 let connId = 0;
-const seqBySymbol = new Map<string, number>();
+const seqBySymbol = new Map();
 
 const MAX_RETRIES = 5;
 const BASE_DELAY_MS = 400;
 const MAX_DELAY_MS = 8000;
-const PING_INTERVAL_MS = 60_000; // 30분 타임아웃 방지, 1분마다 PING
+const PING_INTERVAL_MS = 60_000;
 const SUBSCRIBE_CHUNK_SIZE = 50;
 
-function chunk<T>(arr: T[], size: number): T[][] {
-  const out: T[][] = [];
+function chunk(arr, size) {
+  const out = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
 }
 
-function send(msg: OutMessage) {
-  (self as unknown as Worker).postMessage(msg);
+function send(msg) {
+  self.postMessage(msg);
 }
 
 function clearPingTimer() {
@@ -92,7 +38,7 @@ function schedulePing() {
   } catch {
     // ignore
   }
-  pingTimer = setTimeout(schedulePing, PING_INTERVAL_MS) as unknown as number;
+  pingTimer = setTimeout(schedulePing, PING_INTERVAL_MS);
 }
 
 function closeWs() {
@@ -127,7 +73,7 @@ function scheduleReconnect() {
   );
   reconnectTimer = setTimeout(() => {
     connect();
-  }, delay) as unknown as number;
+  }, delay);
 }
 
 function connect() {
@@ -147,8 +93,6 @@ function connect() {
     send({ type: "open" });
     schedulePing();
     try {
-      // Coinone: 각 심볼별로 SUBSCRIBE (topic은 1:1)
-      // 과도한 구독 시 chunk로 나눠 전송
       const chunks = chunk(symbols, SUBSCRIBE_CHUNK_SIZE);
       for (const symChunk of chunks) {
         for (const sym of symChunk) {
@@ -181,13 +125,9 @@ function connect() {
 
   ws.onclose = (ev) => {
     const code =
-      ev && typeof (ev as CloseEvent).code === "number"
-        ? (ev as CloseEvent).code
-        : undefined;
+      ev && typeof ev.code === "number" ? ev.code : undefined;
     const reason =
-      ev && typeof (ev as CloseEvent).reason === "string"
-        ? (ev as CloseEvent).reason
-        : undefined;
+      ev && typeof ev.reason === "string" ? ev.reason : undefined;
     if (code !== undefined || reason) {
       send({
         type: "error",
@@ -199,7 +139,7 @@ function connect() {
   };
 }
 
-function toNum(v: unknown): number | undefined {
+function toNum(v) {
   if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
   if (typeof v === "string") {
     const n = Number.parseFloat(v);
@@ -208,47 +148,33 @@ function toNum(v: unknown): number | undefined {
   return undefined;
 }
 
-function parseAndEmit(text: string) {
+function parseAndEmit(text) {
   try {
-    const payload = JSON.parse(text) as {
-      response_type?: string;
-      r?: string;
-      channel?: string;
-      c?: string;
-      data?: CoinoneWsTickerData | CoinoneWsTickerDataShort;
-      d?: CoinoneWsTickerDataShort;
-      [k: string]: unknown;
-    };
+    const payload = JSON.parse(text);
 
-    // PONG 무시
     if (payload.response_type === "PONG" || payload.r === "PONG") return;
-    // SUBSCRIBED 확인 응답 무시
     if (
       payload.response_type === "SUBSCRIBED" ||
       payload.r === "SUBSCRIBED"
     )
       return;
 
-    // TICKER DATA (DEFAULT: data, SHORT: d)
     if (payload.response_type !== "DATA" && payload.r !== "DATA") return;
-    const data = (payload.d ?? payload.data) as
-      | CoinoneWsTickerData
-      | CoinoneWsTickerDataShort
-      | undefined;
+    const data = payload.d ?? payload.data;
     if (!data || typeof data !== "object") return;
 
-    const d = data as CoinoneWsTickerData & CoinoneWsTickerDataShort;
-    const symbol = (
-      (d.target_currency ?? d.tc) as string | undefined
-    )?.toUpperCase?.();
-    if (!symbol) return;
+    const d = data;
+    const symbol = d.target_currency ?? d.tc;
+    const sym =
+      typeof symbol === "string" ? symbol.toUpperCase() : undefined;
+    if (!sym) return;
 
     const last = toNum(d.last ?? d.la);
     if (last === undefined) return;
 
     const first = toNum(d.first ?? d.fi);
-    let changeRatePercent: number | undefined;
-    let changeAmount: number | undefined;
+    let changeRatePercent;
+    let changeAmount;
     if (first !== undefined && first !== 0) {
       changeAmount = last - first;
       changeRatePercent = (changeAmount / first) * 100;
@@ -262,23 +188,23 @@ function parseAndEmit(text: string) {
     send({
       type: "tick",
       data: {
-        symbol,
+        symbol: sym,
         connId,
         ts,
-        seq: (seqBySymbol.get(symbol) ?? 0) + 1,
+        seq: (seqBySymbol.get(sym) ?? 0) + 1,
         closePrice: last,
         changeRatePercent,
         changeAmount,
         tradeValueKrw: quoteVol,
       },
     });
-    seqBySymbol.set(symbol, (seqBySymbol.get(symbol) ?? 0) + 1);
+    seqBySymbol.set(sym, (seqBySymbol.get(sym) ?? 0) + 1);
   } catch {
     // ignore parse errors
   }
 }
 
-self.onmessage = (e: MessageEvent<InMessage>) => {
+self.onmessage = (e) => {
   const msg = e.data;
   if (msg.type === "stop") {
     stopped = true;

@@ -46,8 +46,8 @@ export default function Loading() {
             </div>
 
             <div className="flex-1 min-h-0 overflow-hidden">
-              <div className="grid grid-cols-[minmax(0,1fr)_88px_52px_64px_64px] gap-1.5 px-2 py-2 text-[10px] text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-800 overflow-x-hidden">
-                <div>{t("table.name")}</div>
+              <div className="grid grid-cols-[minmax(0,1fr)_88px_52px_64px_64px] gap-1.5 px-2 py-2 text-[10px] font-normal text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-800 overflow-x-hidden">
+                <div>{t("table.nameHeaderKorean")}</div>
                 <div className="text-right">{t("table.price")}</div>
                 <div className="ml-1 text-right">{t("table.korp")}</div>
                 <div className="text-right">{t("table.change24h")}</div>

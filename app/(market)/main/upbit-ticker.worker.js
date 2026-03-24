@@ -1,67 +1,24 @@
-export {};
-
-type StartMessage = {
-  type: "start";
-  markets: string[];
-};
-
-type StopMessage = {
-  type: "stop";
-};
-
-type InMessage = StartMessage | StopMessage;
-
-type UpbitWsTicker = {
-  code?: string; // WS DEFAULT: code
-  market?: string; // REST-style fallback
-  timestamp?: number; // ms
-  trade_timestamp?: number; // ms
-  trade_price: number;
-  signed_change_rate: number;
-  signed_change_price: number;
-  acc_trade_price_24h: number;
-};
-
-type OutMessage =
-  | { type: "open" }
-  | { type: "close" }
-  | { type: "error"; message: string }
-  | { type: "reconnect_failed" }
-  | {
-      type: "tick";
-      data: {
-        market: string;
-        connId: number;
-        ts: number;
-        seq: number;
-        tradePrice: number;
-        signedChangeRate: number;
-        signedChangePrice: number;
-        accTradePrice24h: number;
-      };
-    };
-
-let ws: WebSocket | null = null;
-let reconnectTimer: number | null = null;
-let currentMarkets: string[] = [];
+let ws = null;
+let reconnectTimer = null;
+let currentMarkets = [];
 let consecutiveFailures = 0;
 let stopped = false;
 let connId = 0;
-const seqByMarket = new Map<string, number>();
+const seqByMarket = new Map();
 
 const MAX_RETRIES = 5;
 const BASE_DELAY_MS = 400;
 const MAX_DELAY_MS = 8000;
 const SUBSCRIBE_CHUNK_SIZE = 100;
 
-function chunk<T>(arr: T[], size: number): T[][] {
-  const out: T[][] = [];
+function chunk(arr, size) {
+  const out = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
 }
 
-function send(msg: OutMessage) {
-  (self as unknown as Worker).postMessage(msg);
+function send(msg) {
+  self.postMessage(msg);
 }
 
 function closeWs() {
@@ -95,7 +52,7 @@ function scheduleReconnect() {
   );
   reconnectTimer = setTimeout(() => {
     connect();
-  }, delay) as unknown as number;
+  }, delay);
 }
 
 function connect() {
@@ -115,8 +72,6 @@ function connect() {
     clearReconnectTimer();
     send({ type: "open" });
     try {
-      // Upbit WS may close when too many codes are subscribed at once.
-      // Subscribe in chunks to stay under per-message limits.
       const codesChunks = chunk(markets, SUBSCRIBE_CHUNK_SIZE);
       for (const codes of codesChunks) {
         ws?.send(
@@ -152,13 +107,9 @@ function connect() {
 
   ws.onclose = (ev) => {
     const code =
-      ev && typeof (ev as CloseEvent).code === "number"
-        ? (ev as CloseEvent).code
-        : undefined;
+      ev && typeof ev.code === "number" ? ev.code : undefined;
     const reason =
-      ev && typeof (ev as CloseEvent).reason === "string"
-        ? (ev as CloseEvent).reason
-        : undefined;
+      ev && typeof ev.reason === "string" ? ev.reason : undefined;
     if (code !== undefined || reason) {
       send({
         type: "error",
@@ -170,9 +121,9 @@ function connect() {
   };
 }
 
-function parseAndEmit(text: string) {
+function parseAndEmit(text) {
   try {
-    const payload = JSON.parse(text) as UpbitWsTicker;
+    const payload = JSON.parse(text);
     const market = payload.code ?? payload.market;
     if (!market) return;
     if (
@@ -204,7 +155,7 @@ function parseAndEmit(text: string) {
   }
 }
 
-self.onmessage = (e: MessageEvent<InMessage>) => {
+self.onmessage = (e) => {
   const msg = e.data;
   if (msg.type === "stop") {
     stopped = true;
@@ -220,4 +171,3 @@ self.onmessage = (e: MessageEvent<InMessage>) => {
     connect();
   }
 };
-

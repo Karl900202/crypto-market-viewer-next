@@ -1,80 +1,24 @@
-export {};
-
-type StartMessage = {
-  type: "start";
-  symbols: string[]; // e.g. ["BTC", "ETH"] (base symbols)
-};
-
-type StopMessage = {
-  type: "stop";
-};
-
-type InMessage = StartMessage | StopMessage;
-
-type BithumbWsEnvelope =
-  | {
-      type: string; // "ticker" | ...
-      content?: unknown;
-    }
-  | {
-      status?: string;
-      resmsg?: string;
-    };
-
-type BithumbWsTickerContent = {
-  symbol?: string; // e.g. "BTC_KRW"
-  tickTime?: string | number;
-  date?: string | number;
-  time?: string | number;
-  timestamp?: string | number;
-  closePrice?: string; // last price
-  chgRate?: string; // percent change (string number)
-  chgAmt?: string; // change amount (string number)
-  value?: string; // turnover value
-  // sometimes docs differ; keep loose
-  [k: string]: unknown;
-};
-
-type OutMessage =
-  | { type: "open" }
-  | { type: "close" }
-  | { type: "error"; message: string }
-  | { type: "reconnect_failed" }
-  | {
-      type: "tick";
-      data: {
-        symbol: string; // base symbol, e.g. "BTC"
-        connId: number;
-        ts: number;
-        seq: number;
-        closePrice: number;
-        changeRatePercent?: number;
-        changeAmount?: number;
-        tradeValueKrw?: number;
-      };
-    };
-
-let ws: WebSocket | null = null;
-let reconnectTimer: number | null = null;
-let currentSymbols: string[] = [];
+let ws = null;
+let reconnectTimer = null;
+let currentSymbols = [];
 let consecutiveFailures = 0;
 let stopped = false;
 let connId = 0;
-const seqBySymbol = new Map<string, number>();
+const seqBySymbol = new Map();
 
 const MAX_RETRIES = 5;
 const BASE_DELAY_MS = 400;
 const MAX_DELAY_MS = 8000;
 const SUBSCRIBE_CHUNK_SIZE = 100;
 
-function chunk<T>(arr: T[], size: number): T[][] {
-  const out: T[][] = [];
+function chunk(arr, size) {
+  const out = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
 }
 
-function send(msg: OutMessage) {
-  (self as unknown as Worker).postMessage(msg);
+function send(msg) {
+  self.postMessage(msg);
 }
 
 function closeWs() {
@@ -108,7 +52,7 @@ function scheduleReconnect() {
   );
   reconnectTimer = setTimeout(() => {
     connect();
-  }, delay) as unknown as number;
+  }, delay);
 }
 
 function connect() {
@@ -127,8 +71,6 @@ function connect() {
     send({ type: "open" });
     try {
       const markets = symbols.map((s) => `${s}_KRW`);
-      // Bithumb public WS commonly requires tickTypes for ticker stream.
-      // Bithumb WS may close if subscribing too many symbols at once.
       const chunks = chunk(markets, SUBSCRIBE_CHUNK_SIZE);
       for (const symbolsChunk of chunks) {
         ws?.send(
@@ -164,13 +106,9 @@ function connect() {
 
   ws.onclose = (ev) => {
     const code =
-      ev && typeof (ev as CloseEvent).code === "number"
-        ? (ev as CloseEvent).code
-        : undefined;
+      ev && typeof ev.code === "number" ? ev.code : undefined;
     const reason =
-      ev && typeof (ev as CloseEvent).reason === "string"
-        ? (ev as CloseEvent).reason
-        : undefined;
+      ev && typeof ev.reason === "string" ? ev.reason : undefined;
     if (code !== undefined || reason) {
       send({
         type: "error",
@@ -182,7 +120,7 @@ function connect() {
   };
 }
 
-function toNum(v: unknown): number | undefined {
+function toNum(v) {
   if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
   if (typeof v === "string") {
     const n = Number.parseFloat(v);
@@ -191,27 +129,24 @@ function toNum(v: unknown): number | undefined {
   return undefined;
 }
 
-function toTs(v: unknown): number | undefined {
+function toTs(v) {
   if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
   if (typeof v === "string") {
     const s = v.trim();
     if (!s) return undefined;
-    // common cases: ms timestamp as string
     const n = Number.parseInt(s, 10);
     if (Number.isFinite(n)) {
-      // if it's in seconds, convert to ms (heuristic)
       return n < 10_000_000_000 ? n * 1000 : n;
     }
   }
   return undefined;
 }
 
-function parseAndEmit(text: string) {
+function parseAndEmit(text) {
   try {
-    const payload = JSON.parse(text) as BithumbWsEnvelope;
+    const payload = JSON.parse(text);
     if (!payload || typeof payload !== "object") return;
     if ("status" in payload && typeof payload.status === "string") {
-      // subscription ack/error
       if (payload.status !== "0000") {
         send({
           type: "error",
@@ -219,35 +154,31 @@ function parseAndEmit(text: string) {
             payload.resmsg ??
             `Bithumb WS subscription error (status=${payload.status})`,
         });
-      } else {
-        // status === "0000" means subscribe succeeded (ACK). Not an error.
-        // Avoid sending it as "error" because the main thread marks WS as degraded on errors.
       }
       return;
     }
 
     if (!("type" in payload) || payload.type !== "ticker") return;
-    const content = (payload as { content?: unknown }).content;
+    const content = payload.content;
     if (!content || typeof content !== "object") return;
 
-    const c = content as BithumbWsTickerContent;
+    const c = content;
     const market = typeof c.symbol === "string" ? c.symbol : undefined;
     if (!market || !market.includes("_")) return;
     const base = market.split("_")[0];
     if (!base) return;
 
-    const cx = c as BithumbWsTickerContent & Record<string, unknown>;
-    const close = toNum(cx.closePrice ?? cx.close_price);
+    const close = toNum(c.closePrice ?? c.close_price);
     if (close === undefined) return;
 
-    const rate = toNum(cx.chgRate ?? cx.chg_rate);
-    const amt = toNum(cx.chgAmt ?? cx.chg_amt);
-    const value = toNum(cx.value ?? cx.trade_value);
+    const rate = toNum(c.chgRate ?? c.chg_rate);
+    const amt = toNum(c.chgAmt ?? c.chg_amt);
+    const value = toNum(c.value ?? c.trade_value);
     const ts =
-      toTs(cx.tickTime ?? cx.tick_time) ??
-      toTs(cx.timestamp) ??
-      toTs(cx.time) ??
-      toTs(cx.date) ??
+      toTs(c.tickTime ?? c.tick_time) ??
+      toTs(c.timestamp) ??
+      toTs(c.time) ??
+      toTs(c.date) ??
       Date.now();
 
     send({
@@ -269,7 +200,7 @@ function parseAndEmit(text: string) {
   }
 }
 
-self.onmessage = (e: MessageEvent<InMessage>) => {
+self.onmessage = (e) => {
   const msg = e.data;
   if (msg.type === "stop") {
     stopped = true;
@@ -285,4 +216,3 @@ self.onmessage = (e: MessageEvent<InMessage>) => {
     connect();
   }
 };
-

@@ -2,10 +2,10 @@ import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import {
   mapUpbitWsTickToVM,
   mapUpbitRestTickerToVM,
-  mapBithumbWsTickToVM,
+  mapClosePriceWsTickToVM,
   mapBithumbRestTickerToVM,
-  mapCoinoneWsTickToVM,
   mapCoinoneRestTickerToVM,
+  type ClosePriceWsTick,
   type DomesticTickerVM,
 } from "@/lib/domestic-ticker-vm";
 import {
@@ -226,7 +226,10 @@ export function setupDomesticExchangeConnection(
       });
       backoffMs = T.restBackoffInitialMs;
     } catch {
-      deps.logThrottled(logKey("fallback_exception"), `[${kind}] REST fallback exception`);
+      deps.logThrottled(
+        logKey("fallback_exception"),
+        `[${kind}] REST fallback exception`,
+      );
     }
   };
 
@@ -404,7 +407,9 @@ export function setupDomesticExchangeConnection(
       }
       console.warn(
         `[${kind}] WS ${msg.type} -> degraded (fallback eligible)`,
-        msg.type === "error" && msg.message ? { message: msg.message } : undefined,
+        msg.type === "error" && msg.message
+          ? { message: msg.message }
+          : undefined,
       );
       return;
     }
@@ -425,18 +430,8 @@ export function setupDomesticExchangeConnection(
       const marketCode = d.market as string;
       const symbol = marketCode.split("-")[1];
       if (!symbol) return;
-      const vm = mapUpbitWsTickToVM(d as unknown as Parameters<typeof mapUpbitWsTickToVM>[0]);
-      const incoming = {
-        connId: (d.connId as number) ?? 1,
-        ts: (d.ts as number) ?? Date.now(),
-        seq: (d.seq as number) ?? 0,
-      };
-      deps.applyDomesticTicker(symbol, vm, incoming);
-    } else if (kind === "bithumb") {
-      const symbol = d.symbol as string;
-      if (!symbol) return;
-      const vm = mapBithumbWsTickToVM(
-        d as unknown as Parameters<typeof mapBithumbWsTickToVM>[0],
+      const vm = mapUpbitWsTickToVM(
+        d as unknown as Parameters<typeof mapUpbitWsTickToVM>[0],
       );
       const incoming = {
         connId: (d.connId as number) ?? 1,
@@ -447,9 +442,7 @@ export function setupDomesticExchangeConnection(
     } else {
       const symbol = d.symbol as string;
       if (!symbol) return;
-      const vm = mapCoinoneWsTickToVM(
-        d as unknown as Parameters<typeof mapCoinoneWsTickToVM>[0],
-      );
+      const vm = mapClosePriceWsTickToVM(d as unknown as ClosePriceWsTick);
       const incoming = {
         connId: (d.connId as number) ?? 1,
         ts: (d.ts as number) ?? Date.now(),

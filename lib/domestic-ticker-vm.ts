@@ -11,6 +11,12 @@ export interface DomesticTickerVM {
 
 export type DomesticTickerVMPartial = Partial<DomesticTickerVM>;
 
+/** 렌더/스냅샷 비교용 — VM 필드를 한 문자열로 */
+export function domesticTickerVmSnapshot(vm: DomesticTickerVM | undefined): string {
+  if (!vm) return "";
+  return `${vm.price ?? ""}:${vm.changePercent ?? ""}:${vm.changeAmount ?? ""}:${vm.tradeValueKrw ?? ""}`;
+}
+
 // --- Upbit ---
 
 /** Upbit 워커(WS) tick 메시지 */
@@ -56,10 +62,10 @@ export function mapUpbitRestTickerToVM(
   };
 }
 
-// --- Bithumb ---
+// --- Bithumb / Coinone (WS tick 동일 형식) ---
 
-/** Bithumb 워커(WS) tick 메시지 */
-export interface BithumbWsTick {
+/** 빗썸·코인원 워커가 메인 스레드로 보내는 tick 페이로드 (closePrice 기준) */
+export interface ClosePriceWsTick {
   symbol: string;
   closePrice: number;
   changeRatePercent?: number;
@@ -67,15 +73,20 @@ export interface BithumbWsTick {
   tradeValueKrw?: number;
 }
 
-export function mapBithumbWsTickToVM(tick: BithumbWsTick): DomesticTickerVM {
+export type BithumbWsTick = ClosePriceWsTick;
+export type CoinoneWsTick = ClosePriceWsTick;
+
+export function mapClosePriceWsTickToVM(tick: ClosePriceWsTick): DomesticTickerVM {
   const vm: DomesticTickerVM = { price: tick.closePrice };
   if (tick.changeRatePercent !== undefined)
     vm.changePercent = tick.changeRatePercent;
   if (tick.changeAmount !== undefined) vm.changeAmount = tick.changeAmount;
-  if (tick.tradeValueKrw !== undefined)
-    vm.tradeValueKrw = tick.tradeValueKrw;
+  if (tick.tradeValueKrw !== undefined) vm.tradeValueKrw = tick.tradeValueKrw;
   return vm;
 }
+
+export const mapBithumbWsTickToVM = mapClosePriceWsTickToVM;
+export const mapCoinoneWsTickToVM = mapClosePriceWsTickToVM;
 
 /** Bithumb REST ticker 응답 (개별 티커) */
 export interface BithumbRestTicker {
@@ -93,10 +104,7 @@ export function mapBithumbRestTickerToVM(
   const prevClose = parseFloat(ticker.prev_closing_price);
   if (!Number.isFinite(close)) return null;
   const vm: DomesticTickerVM = { price: close };
-  if (
-    Number.isFinite(prevClose) &&
-    prevClose !== 0
-  ) {
+  if (Number.isFinite(prevClose) && prevClose !== 0) {
     vm.changeAmount = close - prevClose;
     vm.changePercent = (vm.changeAmount / prevClose) * 100;
   }
@@ -105,27 +113,6 @@ export function mapBithumbRestTickerToVM(
   );
   if (Number.isFinite(tradeValue)) vm.tradeValueKrw = tradeValue;
   return { symbol, vm };
-}
-
-// --- Coinone ---
-
-/** Coinone 워커(WS) tick 메시지 (Bithumb과 동일 출력 형식) */
-export interface CoinoneWsTick {
-  symbol: string;
-  closePrice: number;
-  changeRatePercent?: number;
-  changeAmount?: number;
-  tradeValueKrw?: number;
-}
-
-export function mapCoinoneWsTickToVM(tick: CoinoneWsTick): DomesticTickerVM {
-  const vm: DomesticTickerVM = { price: tick.closePrice };
-  if (tick.changeRatePercent !== undefined)
-    vm.changePercent = tick.changeRatePercent;
-  if (tick.changeAmount !== undefined) vm.changeAmount = tick.changeAmount;
-  if (tick.tradeValueKrw !== undefined)
-    vm.tradeValueKrw = tick.tradeValueKrw;
-  return vm;
 }
 
 /** Coinone REST ticker 응답 */
@@ -139,8 +126,7 @@ export interface CoinoneRestTicker {
 export function mapCoinoneRestTickerToVM(
   t: CoinoneRestTicker,
 ): { symbol: string; vm: DomesticTickerVM } | null {
-  const symbol =
-    t.target_currency?.toUpperCase?.() ?? t.target_currency;
+  const symbol = t.target_currency?.toUpperCase?.() ?? t.target_currency;
   if (!symbol) return null;
   const last = parseFloat(t.last);
   if (!Number.isFinite(last)) return null;
