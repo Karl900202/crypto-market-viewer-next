@@ -11,6 +11,7 @@ import {
 import { domesticExchangeWorkerUrls } from "@/lib/domestic-exchange-worker-urls";
 import { setupDomesticExchangeConnection } from "@/lib/setup-domestic-exchange-connection";
 import { getCoinEnglishDisplayName } from "@/lib/coin-english-display-name";
+import { formatPrice } from "@/lib/format-price";
 import type { NameColumnMode } from "@/lib/name-column-mode";
 import { sortDisplayCoins } from "@/lib/coin-sort";
 import Loading from "./loading";
@@ -126,22 +127,6 @@ const calculateKorP = (
   const v = ((koreanPrice - globalPrice) / globalPrice) * 100;
   return Number.isFinite(v) ? v : undefined;
 };
-
-function formatPrice(price: number) {
-  if (!Number.isFinite(price)) return "-";
-  const abs = Math.abs(price);
-  const maximumFractionDigits =
-    abs >= 1000 ? 0 : abs >= 1 ? 2 : abs >= 0.01 ? 4 : abs >= 0.0001 ? 6 : 8;
-  return price.toLocaleString("ko-KR", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits,
-  });
-}
-
-function formatTradeValueInMillionsKrw(valueKrw: number) {
-  const millions = Math.round(valueKrw / 1_000_000);
-  return `${millions.toLocaleString("ko-KR")}백만`;
-}
 
 export default function MainPage() {
   const t = useT();
@@ -729,8 +714,6 @@ export default function MainPage() {
                 selectedSymbol={selectedCoinSymbol}
                 priceFlash={priceFlash}
                 onSelect={onSelectSymbol}
-                formatPrice={formatPrice}
-                formatTradeValueInMillionsKrw={formatTradeValueInMillionsKrw}
                 SkeletonRow={MarketListSkeletonRow}
                 nameColumnMode={nameColumnMode}
                 onToggleNameColumnMode={toggleNameColumnMode}

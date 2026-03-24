@@ -77,7 +77,6 @@ export const CoinRow = memo(
 
     return (
       <button
-        key={symbol}
         type="button"
         onClick={handleClick}
         className={`w-full overflow-hidden border-b border-[#eef1f5] px-3 py-2 text-left font-normal transition-colors hover:bg-[#f7f9fc] dark:border-gray-800 dark:hover:bg-gray-800/80 ${
@@ -204,5 +203,8 @@ export const CoinRow = memo(
       domesticTickerVmSnapshot(b.domestic) &&
     a.globalPriceKrw === b.globalPriceKrw &&
     a.isSelected === b.isSelected &&
-    a.flash === b.flash,
+    a.flash === b.flash &&
+    a.onSelect === b.onSelect &&
+    a.formatPrice === b.formatPrice &&
+    a.formatTradeValueInMillionsKrw === b.formatTradeValueInMillionsKrw,
 );

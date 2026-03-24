@@ -1,14 +1,19 @@
 "use client";
 
-import React, { memo, useRef } from "react";
+import React, { memo, useCallback, useRef } from "react";
 import type { DomesticTickerVM } from "@/lib/domestic-ticker-vm";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { NameColumnMode } from "@/lib/name-column-mode";
+import {
+  formatPrice,
+  formatTradeValueInMillionsKrw,
+} from "@/lib/format-price";
 import {
   CoinRow,
   COIN_LIST_ROW_GRID_CLASS,
   type PriceFlashDir,
 } from "./CoinRow";
+import { CoinListExchangePending } from "./CoinListExchangePending";
 
 /** CoinRow: py-2 + 두 줄 텍스트 + border — 스크롤 높이 추정 */
 const COIN_LIST_ROW_ESTIMATE_PX = 56;
@@ -42,8 +47,6 @@ export type CoinListTableProps = {
   selectedSymbol: string;
   priceFlash: Map<string, PriceFlashDir>;
   onSelect: (symbol: string) => void;
-  formatPrice: (price: number) => string;
-  formatTradeValueInMillionsKrw: (valueKrw: number) => string;
   SkeletonRow: React.ComponentType<{ keyProp: number }>;
   nameColumnMode: NameColumnMode;
   onToggleNameColumnMode: () => void;
@@ -190,8 +193,6 @@ export const CoinListTable = memo(function CoinListTable(
     selectedSymbol,
     priceFlash,
     onSelect,
-    formatPrice,
-    formatTradeValueInMillionsKrw,
     SkeletonRow,
     nameColumnMode,
     onToggleNameColumnMode,
@@ -199,12 +200,16 @@ export const CoinListTable = memo(function CoinListTable(
 
   const showEmptyState = !isDomesticReady;
   const scrollParentRef = useRef<HTMLDivElement>(null);
+  const getScrollElement = useCallback(
+    () => scrollParentRef.current,
+    [],
+  );
   const virtualRowCount = showEmptyState ? 0 : coins.length;
   const virtualizer = useVirtualizer({
     count: virtualRowCount,
-    getScrollElement: () => scrollParentRef.current,
+    getScrollElement,
     estimateSize: () => COIN_LIST_ROW_ESTIMATE_PX,
-    overscan: 12,
+    overscan: 8,
   });
 
   return (
@@ -253,125 +258,14 @@ export const CoinListTable = memo(function CoinListTable(
 
       {showEmptyState ? (
         selectedExchange === "업비트 KRW" ? (
-          <div className="p-4 font-normal">
-            <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-3">
-              <div className="flex items-start gap-3">
-                <div
-                  className={`mt-0.5 shrink-0 ${
-                    upbitConnectionStatus === "connecting"
-                      ? "text-yellow-500"
-                      : upbitConnectionStatus === "degraded"
-                        ? "text-orange-500"
-                        : "text-gray-400"
-                  }`}
-                  aria-hidden="true"
-                >
-                  <svg viewBox="0 0 24 24" width="18" height="18">
-                    <path
-                      fill="currentColor"
-                      d="M12 6V3L8 7l4 4V8c2.76 0 5 2.24 5 5a5 5 0 0 1-8.66 3.54l-1.42 1.42A7 7 0 1 0 12 6z"
-                    />
-                  </svg>
-                </div>
-
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-normal text-gray-900 dark:text-white">
-                    {upbitConnectionStatus === "degraded"
-                      ? t("market.connectionFailed")
-                      : t("market.connectionPending")}
-                  </div>
-                  <div className="mt-1 text-xs text-gray-600 dark:text-gray-400">
-                    {t("market.staleDataHidden")}
-                  </div>
-                </div>
-
-                <div className="shrink-0 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                  {t("market.connectionPending")}
-                </div>
-              </div>
-            </div>
-          </div>
+          <CoinListExchangePending status={upbitConnectionStatus} t={t} />
         ) : selectedExchange === "빗썸 KRW" ? (
-          <div className="p-4 font-normal">
-            <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-3">
-              <div className="flex items-start gap-3">
-                <div
-                  className={`mt-0.5 shrink-0 ${
-                    bithumbConnectionStatus === "connecting"
-                      ? "text-yellow-500"
-                      : bithumbConnectionStatus === "degraded"
-                        ? "text-orange-500"
-                        : "text-gray-400"
-                  }`}
-                  aria-hidden="true"
-                >
-                  <svg viewBox="0 0 24 24" width="18" height="18">
-                    <path
-                      fill="currentColor"
-                      d="M12 6V3L8 7l4 4V8c2.76 0 5 2.24 5 5a5 5 0 0 1-8.66 3.54l-1.42 1.42A7 7 0 1 0 12 6z"
-                    />
-                  </svg>
-                </div>
-
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-normal text-gray-900 dark:text-white">
-                    {bithumbConnectionStatus === "degraded"
-                      ? t("market.connectionFailed")
-                      : t("market.connectionPending")}
-                  </div>
-                  <div className="mt-1 text-xs text-gray-600 dark:text-gray-400">
-                    {t("market.staleDataHidden")}
-                  </div>
-                </div>
-
-                <div className="shrink-0 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                  {t("market.connectionPending")}
-                </div>
-              </div>
-            </div>
-          </div>
+          <CoinListExchangePending status={bithumbConnectionStatus} t={t} />
         ) : selectedExchange === "코인원 KRW" ? (
-          <div className="p-4 font-normal">
-            <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-3">
-              <div className="flex items-start gap-3">
-                <div
-                  className={`mt-0.5 shrink-0 ${
-                    coinoneConnectionStatus === "connecting"
-                      ? "text-yellow-500"
-                      : coinoneConnectionStatus === "degraded"
-                        ? "text-orange-500"
-                        : "text-gray-400"
-                  }`}
-                  aria-hidden="true"
-                >
-                  <svg viewBox="0 0 24 24" width="18" height="18">
-                    <path
-                      fill="currentColor"
-                      d="M12 6V3L8 7l4 4V8c2.76 0 5 2.24 5 5a5 5 0 0 1-8.66 3.54l-1.42 1.42A7 7 0 1 0 12 6z"
-                    />
-                  </svg>
-                </div>
-
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-normal text-gray-900 dark:text-white">
-                    {coinoneConnectionStatus === "degraded"
-                      ? t("market.connectionFailed")
-                      : t("market.connectionPending")}
-                  </div>
-                  <div className="mt-1 text-xs text-gray-600 dark:text-gray-400">
-                    {t("market.staleDataHidden")}
-                  </div>
-                </div>
-
-                <div className="shrink-0 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                  {t("market.connectionPending")}
-                </div>
-              </div>
-            </div>
-          </div>
+          <CoinListExchangePending status={coinoneConnectionStatus} t={t} />
         ) : (
           <div>
-            {Array.from({ length: 12 }).map((_, i) => (
+            {Array.from({ length: 12 }, (_, i) => (
               <SkeletonRow key={i} keyProp={i} />
             ))}
           </div>
