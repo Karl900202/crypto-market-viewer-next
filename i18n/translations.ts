@@ -29,7 +29,34 @@ export type TranslationKey =
   | "table.volume24h"
   | "market.binanceUsdtMarket"
   | "chart.placeholderTitle"
-  | "chart.placeholderSubtitle";
+  | "chart.placeholderSubtitle"
+  | "chart.binanceCaption"
+  | "chart.loading"
+  | "chart.loadError"
+  | "chart.rangeTitle"
+  | "chart.detailTitle"
+  | "chart.timeframeTitle"
+  | "chart.minutePlaceholder"
+  | "chart.range1d"
+  | "chart.range1w"
+  | "chart.range1mo"
+  | "chart.range1y"
+  | "chart.int1m"
+  | "chart.int3m"
+  | "chart.int5m"
+  | "chart.int10m"
+  | "chart.int15m"
+  | "chart.int30m"
+  | "chart.int60m"
+  | "chart.wsLive"
+  | "chart.caption10mAs15m"
+  | "chart.legendO"
+  | "chart.legendH"
+  | "chart.legendL"
+  | "chart.legendC"
+  | "chart.legendV"
+  | "chart.volumePaneTitle"
+  | "chart.volumeUnit";
 
 export const translations: Record<Locale, Record<TranslationKey, string>> = {
   ko: {
@@ -64,6 +91,35 @@ export const translations: Record<Locale, Record<TranslationKey, string>> = {
     "chart.placeholderTitle": "Chart 영역 (추후 추가)",
     "chart.placeholderSubtitle":
       "여기에 차트/오더북/호가 등 위젯을 넣을 수 있어요.",
+    "chart.binanceCaption":
+      "바이낸스 USDT · 히스토리 로드 후 WebSocket으로 실시간 반영",
+    "chart.loading": "차트 불러오는 중…",
+    "chart.loadError": "캔들을 불러오지 못했어요.",
+    "chart.rangeTitle": "범위",
+    "chart.detailTitle": "봉",
+    "chart.timeframeTitle": "봉",
+    "chart.minutePlaceholder": "분봉",
+    "chart.range1d": "일",
+    "chart.range1w": "주",
+    "chart.range1mo": "월",
+    "chart.range1y": "년",
+    "chart.int1m": "1분",
+    "chart.int3m": "3분",
+    "chart.int5m": "5분",
+    "chart.int10m": "10분",
+    "chart.int15m": "15분",
+    "chart.int30m": "30분",
+    "chart.int60m": "60분",
+    "chart.wsLive": "실시간",
+    "chart.caption10mAs15m":
+      "※ 10분: 바이낸스에 10분 봉 없음 → 15분 봉으로 표시",
+    "chart.legendO": "시",
+    "chart.legendH": "고",
+    "chart.legendL": "저",
+    "chart.legendC": "종",
+    "chart.legendV": "거래량",
+    "chart.volumePaneTitle": "거래량",
+    "chart.volumeUnit": "USDT",
   },
   en: {
     "nav.home": "Home",
@@ -97,12 +153,40 @@ export const translations: Record<Locale, Record<TranslationKey, string>> = {
     "chart.placeholderTitle": "Chart area (coming soon)",
     "chart.placeholderSubtitle":
       "You can add chart/order book widgets here later.",
+    "chart.binanceCaption":
+      "Binance USDT · history via REST, live updates via WebSocket",
+    "chart.loading": "Loading candles…",
+    "chart.loadError": "Could not load candles.",
+    "chart.rangeTitle": "Range",
+    "chart.detailTitle": "Interval",
+    "chart.timeframeTitle": "Interval",
+    "chart.minutePlaceholder": "Minutes",
+    "chart.range1d": "1D",
+    "chart.range1w": "1W",
+    "chart.range1mo": "1M",
+    "chart.range1y": "1Y",
+    "chart.int1m": "1m",
+    "chart.int3m": "3m",
+    "chart.int5m": "5m",
+    "chart.int10m": "10m",
+    "chart.int15m": "15m",
+    "chart.int30m": "30m",
+    "chart.int60m": "60m",
+    "chart.wsLive": "Live",
+    "chart.caption10mAs15m": "※ 10m: Binance has no 10m candle → 15m stream",
+    "chart.legendO": "O",
+    "chart.legendH": "H",
+    "chart.legendL": "L",
+    "chart.legendC": "C",
+    "chart.legendV": "Vol",
+    "chart.volumePaneTitle": "Volume",
+    "chart.volumeUnit": "USDT",
   },
 };
 
 export function formatTemplate(
   template: string,
-  params?: Record<string, string | number>
+  params?: Record<string, string | number>,
 ) {
   if (!params) return template;
   return template.replace(/\{(\w+)\}/g, (match, key) => {
@@ -110,4 +194,3 @@ export function formatTemplate(
     return value === undefined ? match : String(value);
   });
 }
-

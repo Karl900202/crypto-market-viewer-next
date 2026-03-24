@@ -21,6 +21,7 @@ import {
   type SortState,
 } from "./components/CoinListTable";
 import { MarketListSkeletonRow } from "./components/MarketListSkeletonRow";
+import { CandlestickChart } from "./components/CandlestickChart";
 
 interface CoinData {
   symbol: string;
@@ -756,17 +757,16 @@ export default function MainPage() {
                 </div>
               </div>
 
-              <div className="min-h-0 flex-1 p-4">
-                <div className="flex h-full min-h-[280px] items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50/80 dark:border-gray-700 dark:bg-gray-800/40">
-                  <div className="text-center">
-                    <div className="font-medium text-gray-700 dark:text-gray-200">
-                      {t("chart.placeholderTitle")}
-                    </div>
-                    <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      {t("chart.placeholderSubtitle")}
-                    </div>
-                  </div>
-                </div>
+              <div className="min-h-0 flex-1 min-h-[280px] p-4 flex flex-col">
+                <CandlestickChart
+                  symbol={selectedCoinSymbol}
+                  t={
+                    t as unknown as (
+                      key: string,
+                      params?: Record<string, string | number>,
+                    ) => string
+                  }
+                />
               </div>
             </div>
           </main>
