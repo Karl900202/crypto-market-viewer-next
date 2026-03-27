@@ -14,6 +14,7 @@ import { getCoinEnglishDisplayName } from "@/lib/coin-english-display-name";
 import { formatPrice } from "@/lib/format-price";
 import type { NameColumnMode } from "@/lib/name-column-mode";
 import { sortDisplayCoins } from "@/lib/coin-sort";
+import { useMarketSelectionStore } from "@/stores/useMarketSelectionStore";
 import Loading from "./loading";
 import {
   CoinListTable,
@@ -133,9 +134,15 @@ export default function MainPage() {
   const t = useT();
   const [coins, setCoins] = useState<Map<string, CoinData>>(new Map());
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedExchange, setSelectedExchange] =
-    useState<string>("업비트 KRW");
-  const [selectedSymbol, setSelectedSymbol] = useState<string>("BTC");
+  const selectedExchange = useMarketSelectionStore((s) => s.selectedExchange);
+  const selectedSymbol = useMarketSelectionStore((s) => s.selectedSymbol);
+  const selectedSymbolByExchange = useMarketSelectionStore(
+    (s) => s.selectedSymbolByExchange,
+  );
+  const setSelectedSymbol = useMarketSelectionStore((s) => s.setSelectedSymbol);
+  const setSelectedExchangeAndRestoreSymbol = useMarketSelectionStore(
+    (s) => s.setSelectedExchangeAndRestoreSymbol,
+  );
   const [sort, setSort] = useState<SortState>({ mode: "default" });
   const [nameColumnMode, setNameColumnMode] =
     useState<NameColumnMode>("korean");
@@ -278,15 +285,22 @@ export default function MainPage() {
           triggerCoinsStateSyncRef.current?.();
         }
 
-        // 선택 코인 초기화
+        // 선택 코인 초기화: BTC 상장 시 비트코인, 없으면 목록 첫 종목
         if (
           !hasInitializedSelectedSymbolRef.current &&
           coinsRef.current.size > 0
         ) {
-          const first = coinsRef.current.keys().next().value as
-            | string
-            | undefined;
-          if (first) setSelectedSymbol(first);
+          const savedForThisExchange = selectedSymbolByExchange[exchangeForThisLoad];
+          const preferred = "BTC";
+          const pick =
+            savedForThisExchange && coinsRef.current.has(savedForThisExchange)
+              ? savedForThisExchange
+              : coinsRef.current.has(selectedSymbol)
+                ? selectedSymbol
+                : coinsRef.current.has(preferred)
+            ? preferred
+            : (coinsRef.current.keys().next().value as string | undefined);
+          if (pick) setSelectedSymbol(pick);
           hasInitializedSelectedSymbolRef.current = true;
         }
       } catch (e) {
@@ -297,7 +311,7 @@ export default function MainPage() {
     };
 
     loadListings();
-  }, [selectedExchange]);
+  }, [selectedExchange, selectedSymbol, selectedSymbolByExchange, setSelectedSymbol]);
 
   // 바이낸스 글로벌 가격 맵(USDT) 주기적 갱신
   useEffect(() => {
@@ -612,7 +626,7 @@ export default function MainPage() {
 
   const onSelectSymbol = useCallback((symbol: string) => {
     setSelectedSymbol(symbol);
-  }, []);
+  }, [setSelectedSymbol]);
 
   // 첫 로딩 시에만 loading.tsx 표시
   if (isInitialLoading) {
@@ -637,7 +651,9 @@ export default function MainPage() {
                     </span>
                     <select
                       value={selectedExchange}
-                      onChange={(e) => setSelectedExchange(e.target.value)}
+                      onChange={(e) =>
+                        setSelectedExchangeAndRestoreSymbol(e.target.value)
+                      }
                       className="shrink-0 rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[14px] text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                     >
                       <option value="업비트 KRW">업비트 KRW</option>

@@ -6,7 +6,6 @@ import {
   type DomesticTickerVM,
 } from "@/lib/domestic-ticker-vm";
 import { getCoinEnglishDisplayName } from "@/lib/coin-english-display-name";
-import { MARKET_COLOR_DOWN, MARKET_COLOR_UP } from "@/lib/market-colors";
 import type { NameColumnMode } from "@/lib/name-column-mode";
 
 /** 좌측 마켓 패널(~462px) 기준: 이름 열에 가로 여유 — items-stretch로 컬럼 높이 통일 */
@@ -17,9 +16,9 @@ export const COIN_LIST_ROW_GRID_CLASS =
 export const COIN_LIST_ROW_CELL_CLASS =
   "flex h-full min-h-0 flex-col justify-center self-stretch";
 
-/** 상승 / 하락 브랜드 색 (라이트·다크 공통) — @/lib/market-colors 와 동일 */
-const COLOR_UP = `text-[${MARKET_COLOR_UP}]`;
-const COLOR_DOWN = `text-[${MARKET_COLOR_DOWN}]`;
+/** 상승 / 하락 브랜드 색 (라이트·다크 공통) */
+const COLOR_UP = "text-[#dd3c44]";
+const COLOR_DOWN = "text-[#1375ec]";
 
 /** 상승 빨강 · 하락 파랑 (전일대비·KORP 등 공통) */
 const upDownTextClass = (v: number | undefined) => {
