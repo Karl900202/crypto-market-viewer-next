@@ -7,6 +7,7 @@ import {
 } from "@/lib/domestic-ticker-vm";
 import { getCoinEnglishDisplayName } from "@/lib/coin-english-display-name";
 import type { NameColumnMode } from "@/lib/name-column-mode";
+import { useMarketSelectionStore } from "@/stores/useMarketSelectionStore";
 
 /** 좌측 마켓 패널(~462px) 기준: 이름 열에 가로 여유 — items-stretch로 컬럼 높이 통일 */
 export const COIN_LIST_ROW_GRID_CLASS =
@@ -38,12 +39,13 @@ export type CoinRowProps = {
   symbol: string;
   name: string;
   nameColumnMode: NameColumnMode;
+  isFavorite: boolean;
   korp?: number;
   domestic?: DomesticTickerVM;
   globalPriceKrw?: number;
-  isSelected: boolean;
   flash: PriceFlashDir;
   onSelect: (symbol: string) => void;
+  onToggleFavorite: (symbol: string) => void;
   formatPrice: (price: number) => string;
   formatTradeValueInMillionsKrw: (valueKrw: number) => string;
 };
@@ -54,17 +56,38 @@ export const CoinRow = memo(
       symbol,
       name,
       nameColumnMode,
+      isFavorite,
       korp,
       domestic,
       globalPriceKrw,
-      isSelected,
       flash,
       onSelect,
+      onToggleFavorite,
       formatPrice,
       formatTradeValueInMillionsKrw,
     } = props;
 
+    const isSelected = useMarketSelectionStore(
+      useCallback((s) => s.selectedSymbol === symbol, [symbol]),
+    );
+
     const handleClick = useCallback(() => onSelect(symbol), [onSelect, symbol]);
+    const handleToggleFavorite = useCallback(
+      (e: React.MouseEvent<HTMLElement>) => {
+        e.stopPropagation();
+        onToggleFavorite(symbol);
+      },
+      [onToggleFavorite, symbol],
+    );
+    const handleToggleFavoriteKeyDown = useCallback(
+      (e: React.KeyboardEvent<HTMLElement>) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        e.stopPropagation();
+        onToggleFavorite(symbol);
+      },
+      [onToggleFavorite, symbol],
+    );
 
     const domPrice = domestic?.price;
     const globalKrw = globalPriceKrw;
@@ -79,19 +102,41 @@ export const CoinRow = memo(
       <button
         type="button"
         onClick={handleClick}
-        className={`w-full overflow-hidden border-b border-[#eef1f5] px-3 py-2 text-left font-normal transition-colors hover:bg-[#f7f9fc] dark:border-gray-800 dark:hover:bg-gray-800/80 ${
+        className={`relative w-full overflow-hidden border-b border-[#eef1f5] px-3 py-2 text-left font-normal hover:bg-[#f7f9fc] focus:outline-none dark:border-gray-800 dark:hover:bg-gray-800/80 ${
           isSelected
-            ? "bg-[#e9f0ff] hover:bg-[#e0ebff] dark:bg-blue-950/35 dark:hover:bg-blue-950/45"
+            ? "before:pointer-events-none before:absolute before:inset-y-0 before:left-0 before:z-[1] before:w-[3px] before:bg-orange-500 before:content-[''] dark:before:bg-orange-400 bg-[#e9f0ff] hover:bg-[#e0ebff] dark:bg-blue-950/35 dark:hover:bg-blue-950/45"
             : "bg-white dark:bg-gray-900"
         }`}
       >
         <div className={COIN_LIST_ROW_GRID_CLASS}>
+          <div className="flex items-center gap-1.5">
+              <span
+                role="button"
+                tabIndex={0}
+                aria-label={`${symbol} favorite`}
+                onClick={handleToggleFavorite}
+                onKeyDown={handleToggleFavoriteKeyDown}
+                className={`inline-flex shrink-0 items-center justify-center cursor-pointer ${
+                  isFavorite
+                    ? "text-[#f5c542] hover:text-[#eab308]"
+                    : "text-gray-300 hover:text-gray-400 dark:text-gray-500 dark:hover:text-gray-400"
+                }`}
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                  <path
+                    fill="currentColor"
+                    d="M12 2.5l2.93 5.94 6.56.95-4.74 4.62 1.12 6.53L12 17.47 6.13 20.54l1.12-6.53-4.74-4.62 6.56-.95L12 2.5z"
+                  />
+                </svg>
+              </span>
           <div className={`min-w-0 text-left ${COIN_LIST_ROW_CELL_CLASS}`}>
-            <div
-              className="truncate text-[12px] font-normal leading-snug text-gray-900 dark:text-white"
-              title={primaryName}
-            >
-              {primaryName}
+            <div className="flex min-w-0 items-center gap-1.5">
+              <div
+                className="truncate text-[12px] font-normal leading-snug text-gray-900 dark:text-white"
+                title={primaryName}
+              >
+                {primaryName}
+              </div>
             </div>
             <div
               className="truncate text-[11px] font-normal leading-tight text-[#8b94a1] dark:text-gray-500"
@@ -99,6 +144,7 @@ export const CoinRow = memo(
             >
               {pairLabel}
             </div>
+          </div>
           </div>
 
           <div
@@ -198,13 +244,14 @@ export const CoinRow = memo(
     a.symbol === b.symbol &&
     a.name === b.name &&
     a.nameColumnMode === b.nameColumnMode &&
+    a.isFavorite === b.isFavorite &&
     a.korp === b.korp &&
     domesticTickerVmSnapshot(a.domestic) ===
       domesticTickerVmSnapshot(b.domestic) &&
     a.globalPriceKrw === b.globalPriceKrw &&
-    a.isSelected === b.isSelected &&
     a.flash === b.flash &&
     a.onSelect === b.onSelect &&
+    a.onToggleFavorite === b.onToggleFavorite &&
     a.formatPrice === b.formatPrice &&
     a.formatTradeValueInMillionsKrw === b.formatTradeValueInMillionsKrw,
 );

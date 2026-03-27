@@ -13,10 +13,10 @@ import {
   COIN_LIST_ROW_GRID_CLASS,
   type PriceFlashDir,
 } from "./CoinRow";
-import { CoinListExchangePending } from "./CoinListExchangePending";
-
-/** CoinRow: py-2 + 두 줄 텍스트 + border — 스크롤 높이 추정 */
-const COIN_LIST_ROW_ESTIMATE_PX = 56;
+import {
+  CoinListSkeletonBody,
+  COIN_LIST_ROW_ESTIMATE_PX,
+} from "./coin-list-skeleton";
 
 export type SortKey = "korp" | "price" | "change" | "volume";
 export type SortDir = "asc" | "desc";
@@ -29,6 +29,7 @@ export type SortState =
 type CoinView = {
   symbol: string;
   name: string;
+  isFavorite: boolean;
   korp?: number;
   domestic?: DomesticTickerVM;
   globalPriceKrw?: number;
@@ -39,15 +40,12 @@ export type CoinListTableProps = {
   sort: SortState;
   onToggleSort: (key: SortKey) => void;
   isDomesticReady: boolean;
-  selectedExchange: string;
-  upbitConnectionStatus: "idle" | "connecting" | "live" | "degraded";
-  bithumbConnectionStatus: "idle" | "connecting" | "live" | "degraded";
-  coinoneConnectionStatus: "idle" | "connecting" | "live" | "degraded";
+  /** 국내 연결 후에도 정렬 필드가 전부 올 때까지 false → 테이블 본문 스켈레톤 */
+  isListDataReady?: boolean;
   coins: CoinView[];
-  selectedSymbol: string;
   priceFlash: Map<string, PriceFlashDir>;
   onSelect: (symbol: string) => void;
-  SkeletonRow: React.ComponentType<{ keyProp: number }>;
+  onToggleFavorite: (symbol: string) => void;
   nameColumnMode: NameColumnMode;
   onToggleNameColumnMode: () => void;
 };
@@ -185,20 +183,16 @@ export const CoinListTable = memo(function CoinListTable(
     sort,
     onToggleSort,
     isDomesticReady,
-    selectedExchange,
-    upbitConnectionStatus,
-    bithumbConnectionStatus,
-    coinoneConnectionStatus,
+    isListDataReady = true,
     coins,
-    selectedSymbol,
     priceFlash,
     onSelect,
-    SkeletonRow,
+    onToggleFavorite,
     nameColumnMode,
     onToggleNameColumnMode,
   } = props;
 
-  const showEmptyState = !isDomesticReady;
+  const showEmptyState = !isDomesticReady || !isListDataReady;
   const scrollParentRef = useRef<HTMLDivElement>(null);
   const getScrollElement = useCallback(
     () => scrollParentRef.current,
@@ -215,7 +209,7 @@ export const CoinListTable = memo(function CoinListTable(
   return (
     <div
       ref={scrollParentRef}
-      className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-auto modern-scrollbar"
+      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overflow-x-auto modern-scrollbar"
     >
       <div
         className={`sticky top-0 z-[1] w-full min-w-0 font-normal ${COIN_LIST_ROW_GRID_CLASS} border-b border-[#e5e8eb] bg-[#f9fafb] px-3 py-2 dark:border-gray-800 dark:bg-gray-800/90`}
@@ -257,19 +251,7 @@ export const CoinListTable = memo(function CoinListTable(
       </div>
 
       {showEmptyState ? (
-        selectedExchange === "업비트 KRW" ? (
-          <CoinListExchangePending status={upbitConnectionStatus} t={t} />
-        ) : selectedExchange === "빗썸 KRW" ? (
-          <CoinListExchangePending status={bithumbConnectionStatus} t={t} />
-        ) : selectedExchange === "코인원 KRW" ? (
-          <CoinListExchangePending status={coinoneConnectionStatus} t={t} />
-        ) : (
-          <div>
-            {Array.from({ length: 12 }, (_, i) => (
-              <SkeletonRow key={i} keyProp={i} />
-            ))}
-          </div>
-        )
+        <CoinListSkeletonBody />
       ) : (
         <div
           className="relative w-full"
@@ -287,12 +269,13 @@ export const CoinListTable = memo(function CoinListTable(
                   symbol={coin.symbol}
                   name={coin.name}
                   nameColumnMode={nameColumnMode}
+                  isFavorite={coin.isFavorite}
                   korp={coin.korp}
                   domestic={coin.domestic}
                   globalPriceKrw={coin.globalPriceKrw}
-                  isSelected={coin.symbol === selectedSymbol}
                   flash={priceFlash.get(coin.symbol) ?? null}
                   onSelect={onSelect}
+                  onToggleFavorite={onToggleFavorite}
                   formatPrice={formatPrice}
                   formatTradeValueInMillionsKrw={formatTradeValueInMillionsKrw}
                 />

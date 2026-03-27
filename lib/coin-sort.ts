@@ -63,3 +63,50 @@ export function sortDisplayCoins<T extends CoinSortable>(
     );
   });
 }
+
+/**
+ * 정렬 키에 필요한 값이 **모든** 행에 채워졌는지 — 부분 수신 시 순서가 바뀌는 깜빡임을 줄이기 위해 사용
+ */
+export function hasStableSortDataForAll<T extends CoinSortable>(
+  items: Iterable<T>,
+  sort: SortState,
+): boolean {
+  const list = [...items];
+  if (list.length === 0) return false;
+
+  if (sort.mode === "default") {
+    return list.every(
+      (c) =>
+        c.domestic != null &&
+        c.domestic.tradeValueKrw !== undefined &&
+        Number.isFinite(c.domestic.tradeValueKrw),
+    );
+  }
+
+  if (sort.mode !== "custom") return false;
+
+  switch (sort.key) {
+    case "korp":
+      return list.every((c) => c.korp !== undefined && Number.isFinite(c.korp));
+    case "price":
+      return list.every(
+        (c) => c.domestic != null && Number.isFinite(c.domestic.price),
+      );
+    case "change":
+      return list.every(
+        (c) =>
+          c.domestic != null &&
+          c.domestic.changePercent !== undefined &&
+          Number.isFinite(c.domestic.changePercent),
+      );
+    case "volume":
+      return list.every(
+        (c) =>
+          c.domestic != null &&
+          c.domestic.tradeValueKrw !== undefined &&
+          Number.isFinite(c.domestic.tradeValueKrw),
+      );
+    default:
+      return true;
+  }
+}

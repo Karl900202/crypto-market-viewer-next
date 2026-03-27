@@ -11,18 +11,16 @@ import {
 import { domesticExchangeWorkerUrls } from "@/lib/domestic-exchange-worker-urls";
 import { setupDomesticExchangeConnection } from "@/lib/setup-domestic-exchange-connection";
 import { getCoinEnglishDisplayName } from "@/lib/coin-english-display-name";
-import { formatPrice } from "@/lib/format-price";
 import type { NameColumnMode } from "@/lib/name-column-mode";
-import { sortDisplayCoins } from "@/lib/coin-sort";
+import { hasStableSortDataForAll, sortDisplayCoins } from "@/lib/coin-sort";
 import { useMarketSelectionStore } from "@/stores/useMarketSelectionStore";
-import Loading from "./loading";
+import { useFavoriteCoinsStore } from "@/stores/useFavoriteCoinsStore";
 import {
   CoinListTable,
   type SortKey,
   type SortState,
 } from "./components/CoinListTable";
-import { MarketListSkeletonRow } from "./components/MarketListSkeletonRow";
-import { CandlestickChart } from "./components/CandlestickChart";
+import { MarketRightPanel } from "./components/MarketRightPanel";
 
 interface CoinData {
   symbol: string;
@@ -135,34 +133,37 @@ export default function MainPage() {
   const [coins, setCoins] = useState<Map<string, CoinData>>(new Map());
   const [searchQuery, setSearchQuery] = useState("");
   const selectedExchange = useMarketSelectionStore((s) => s.selectedExchange);
-  const selectedSymbol = useMarketSelectionStore((s) => s.selectedSymbol);
-  const selectedSymbolByExchange = useMarketSelectionStore(
-    (s) => s.selectedSymbolByExchange,
-  );
+  /** selectedSymbolByExchange는 setSelectedSymbol마다 새 객체가 되어 구독 시 매 클릭 리렌더됨 → 구독하지 않음 */
   const setSelectedSymbol = useMarketSelectionStore((s) => s.setSelectedSymbol);
   const setSelectedExchangeAndRestoreSymbol = useMarketSelectionStore(
     (s) => s.setSelectedExchangeAndRestoreSymbol,
   );
+  const favorites = useFavoriteCoinsStore((s) => s.favorites);
+  const toggleFavorite = useFavoriteCoinsStore((s) => s.toggleFavorite);
   const [sort, setSort] = useState<SortState>({ mode: "default" });
+  /** 상장 로드 비동기 완료 시점의 검색·정렬 (effect deps에 넣지 않음) */
+  const searchQueryRef = useRef(searchQuery);
+  const sortRef = useRef(sort);
+  searchQueryRef.current = searchQuery;
+  sortRef.current = sort;
   const [nameColumnMode, setNameColumnMode] =
     useState<NameColumnMode>("korean");
-  const hasInitializedSelectedSymbolRef = useRef(false);
-  const [isInitialLoading, setIsInitialLoading] = useState(true);
   const exchangeLoadingStartTimeRef = useRef<number | null>(null);
-  const [showExchangeLoading, setShowExchangeLoading] = useState(false);
+  const [, setShowExchangeLoading] = useState(false);
   const [isDomesticReady, setIsDomesticReady] = useState(false);
+  /** 정렬에 필요한 필드가 아직 다 안 왔을 때 리스트 대신 스켈레톤 — 일부만 오면 순서가 흔들임 */
+  const [sortListForceShow, setSortListForceShow] = useState(false);
   const isDomesticReadyRef = useRef(false);
   type UpbitConnectionStatus = "idle" | "connecting" | "live" | "degraded";
-  const [upbitConnectionStatus, setUpbitConnectionStatus] =
-    useState<UpbitConnectionStatus>("idle");
+  const [, setUpbitConnectionStatus] = useState<UpbitConnectionStatus>("idle");
   const upbitConnectionStatusRef = useRef<UpbitConnectionStatus>("idle");
   // WS 재연결/폴백은 자동으로 처리한다.
   type BithumbConnectionStatus = "idle" | "connecting" | "live" | "degraded";
-  const [bithumbConnectionStatus, setBithumbConnectionStatus] =
+  const [, setBithumbConnectionStatus] =
     useState<BithumbConnectionStatus>("idle");
   const bithumbConnectionStatusRef = useRef<BithumbConnectionStatus>("idle");
   type CoinoneConnectionStatus = "idle" | "connecting" | "live" | "degraded";
-  const [coinoneConnectionStatus, setCoinoneConnectionStatus] =
+  const [, setCoinoneConnectionStatus] =
     useState<CoinoneConnectionStatus>("idle");
   const coinoneConnectionStatusRef = useRef<CoinoneConnectionStatus>("idle");
   const [priceFlash, setPriceFlash] = useState<
@@ -207,7 +208,6 @@ export default function MainPage() {
   useEffect(() => {
     const exchangeForThisLoad = selectedExchange;
     const loadListings = async () => {
-      setIsInitialLoading(true);
       try {
         const ensureUpbitNameMap = async () => {
           if (upbitNameMapRef.current.size > 0) return;
@@ -285,33 +285,55 @@ export default function MainPage() {
           triggerCoinsStateSyncRef.current?.();
         }
 
-        // 선택 코인 초기화: BTC 상장 시 비트코인, 없으면 목록 첫 종목
-        if (
-          !hasInitializedSelectedSymbolRef.current &&
-          coinsRef.current.size > 0
-        ) {
-          const savedForThisExchange = selectedSymbolByExchange[exchangeForThisLoad];
-          const preferred = "BTC";
-          const pick =
-            savedForThisExchange && coinsRef.current.has(savedForThisExchange)
-              ? savedForThisExchange
-              : coinsRef.current.has(selectedSymbol)
-                ? selectedSymbol
-                : coinsRef.current.has(preferred)
-            ? preferred
-            : (coinsRef.current.keys().next().value as string | undefined);
-          if (pick) setSelectedSymbol(pick);
-          hasInitializedSelectedSymbolRef.current = true;
+        // 선택 심볼: (1) 검색 없음 → persist된 심볼이 상장에 있으면 유지(새로고침 시 이전 선택 복원) (2) 검색 있음 → 유지 또는 필터 첫 코인 (3) 없으면 BTC (4) BTC 없으면 기본 정렬 첫 코인
+        if (coinsRef.current.size > 0) {
+          const st = useMarketSelectionStore.getState();
+          const currentSym = st.selectedSymbol;
+          let pick: string | undefined;
+
+          if (currentSym && coinsRef.current.has(currentSym)) {
+            pick = currentSym;
+          } else {
+            const coinsArray = Array.from(coinsRef.current.values());
+            const qRaw = searchQueryRef.current.trim();
+            const q = qRaw.toLowerCase();
+
+            if (q) {
+              const filtered = coinsArray.filter((coin) => {
+                const en = getCoinEnglishDisplayName(coin.symbol).toLowerCase();
+                return (
+                  coin.name.toLowerCase().includes(q) ||
+                  coin.symbol.toLowerCase().includes(q) ||
+                  en.includes(q)
+                );
+              });
+              const sortedFiltered = sortDisplayCoins(filtered, sortRef.current);
+              if (sortedFiltered.length > 0) {
+                pick = sortedFiltered[0].symbol;
+              }
+            }
+
+            if (!pick) {
+              if (coinsRef.current.has("BTC")) {
+                pick = "BTC";
+              } else {
+                const sortedAll = sortDisplayCoins(coinsArray, {
+                  mode: "default",
+                });
+                pick = sortedAll[0]?.symbol;
+              }
+            }
+          }
+
+          if (pick && pick !== st.selectedSymbol) setSelectedSymbol(pick);
         }
       } catch (e) {
         console.error("Error loading listings:", e);
-      } finally {
-        setIsInitialLoading(false);
       }
     };
 
     loadListings();
-  }, [selectedExchange, selectedSymbol, selectedSymbolByExchange, setSelectedSymbol]);
+  }, [selectedExchange, setSelectedSymbol]);
 
   // 바이낸스 글로벌 가격 맵(USDT) 주기적 갱신
   useEffect(() => {
@@ -609,11 +631,37 @@ export default function MainPage() {
     return sortDisplayCoins(filtered, sort);
   }, [coins, searchQuery, sort]);
 
+  const sortDataReady = useMemo(
+    () => hasStableSortDataForAll(coins.values(), sort),
+    [coins, sort],
+  );
+
+  useEffect(() => {
+    setSortListForceShow(false);
+  }, [selectedExchange, sort]);
+
+  useEffect(() => {
+    if (sortDataReady) setSortListForceShow(false);
+  }, [sortDataReady]);
+
+  useEffect(() => {
+    if (!isDomesticReady || sortDataReady) return;
+    const id = setTimeout(() => setSortListForceShow(true), 4000);
+    return () => clearTimeout(id);
+  }, [isDomesticReady, sortDataReady, selectedExchange, sort]);
+
+  const isListDataReady =
+    coins.size > 0 && (sortDataReady || sortListForceShow);
+
+  const showRightPanelHeaderSkeleton =
+    !isListDataReady || !isDomesticReady;
+
   const tableCoins = useMemo(
     () =>
       filteredCoins.map((coin) => ({
         symbol: coin.symbol,
         name: coin.name,
+        isFavorite: Boolean(favorites[coin.symbol]),
         korp: coin.korp,
         domestic: coin.domestic,
         globalPriceKrw:
@@ -621,20 +669,18 @@ export default function MainPage() {
             ? coin.globalPriceUsdt * displayUsdtToKrw
             : undefined,
       })),
-    [filteredCoins, displayUsdtToKrw],
+    [displayUsdtToKrw, favorites, filteredCoins],
   );
 
   const onSelectSymbol = useCallback((symbol: string) => {
     setSelectedSymbol(symbol);
   }, [setSelectedSymbol]);
-
-  // 첫 로딩 시에만 loading.tsx 표시
-  if (isInitialLoading) {
-    return <Loading />;
-  }
-
-  const selectedCoin = coins.get(selectedSymbol) ?? filteredCoins[0];
-  const selectedCoinSymbol = selectedCoin?.symbol ?? "BTC";
+  const onToggleFavorite = useCallback(
+    (symbol: string) => {
+      toggleFavorite(symbol);
+    },
+    [toggleFavorite],
+  );
 
   return (
     <div className="h-full overflow-hidden bg-gray-100 text-gray-900 dark:bg-gray-950 dark:text-white">
@@ -700,19 +746,6 @@ export default function MainPage() {
             </div>
 
             <div className="relative flex-1 min-h-0 min-w-0 overflow-hidden flex flex-col">
-              {showExchangeLoading && (
-                <div className="absolute inset-0 bg-white/75 dark:bg-gray-900/75 backdrop-blur-sm flex items-center justify-center z-10">
-                  <div className="text-center">
-                    <div className="inline-block animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-yellow-400 mb-2"></div>
-                    <p className="text-gray-900 dark:text-white text-sm">
-                      {t("market.exchangeLoading", {
-                        exchange: selectedExchange.replace(" KRW", ""),
-                      })}
-                    </p>
-                  </div>
-                </div>
-              )}
-
               <CoinListTable
                 t={
                   t as unknown as (
@@ -723,69 +756,31 @@ export default function MainPage() {
                 sort={sort}
                 onToggleSort={toggleSort}
                 isDomesticReady={isDomesticReady}
-                selectedExchange={selectedExchange}
-                upbitConnectionStatus={upbitConnectionStatus}
-                bithumbConnectionStatus={bithumbConnectionStatus}
-                coinoneConnectionStatus={coinoneConnectionStatus}
+                isListDataReady={isListDataReady}
                 coins={tableCoins}
-                selectedSymbol={selectedCoinSymbol}
                 priceFlash={priceFlash}
                 onSelect={onSelectSymbol}
-                SkeletonRow={MarketListSkeletonRow}
+                onToggleFavorite={onToggleFavorite}
                 nameColumnMode={nameColumnMode}
                 onToggleNameColumnMode={toggleNameColumnMode}
               />
             </div>
           </aside>
 
-          {/* Right: 시세 카드 + 차트를 하나의 패널로 */}
-          <main className="min-h-0 min-w-0 flex-1">
-            <div className="flex h-full min-h-0 flex-col overflow-hidden border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
-              <div className="flex shrink-0 items-center justify-between gap-4 px-5 py-4 ">
-                <div className="min-w-0">
-                  <div className="truncate text-base font-semibold leading-tight">
-                    {selectedCoin
-                      ? nameColumnMode === "korean"
-                        ? selectedCoin.name
-                        : getCoinEnglishDisplayName(selectedCoin.symbol)
-                      : selectedCoinSymbol}
-                  </div>
-                  <div className="mt-0.5 truncate text-sm text-gray-500 dark:text-gray-400">
-                    {selectedCoinSymbol}/KRW · {t("market.binanceUsdtMarket")}{" "}
-                    KRW 환산
-                  </div>
-                </div>
-                <div className="shrink-0 text-right tabular-nums">
-                  <div className="text-sm text-gray-500 dark:text-gray-400">
-                    {selectedExchange.replace(" KRW", "")} / GLOBAL
-                  </div>
-                  <div className="text-base font-semibold">
-                    {selectedCoin?.domestic?.price !== undefined
-                      ? formatPrice(selectedCoin.domestic.price)
-                      : "-"}{" "}
-                    <span className="text-gray-500 dark:text-gray-400">·</span>{" "}
-                    {selectedCoin?.globalPriceUsdt !== undefined
-                      ? formatPrice(
-                          selectedCoin.globalPriceUsdt * displayUsdtToKrw,
-                        )
-                      : "-"}
-                  </div>
-                </div>
-              </div>
-
-              <div className="min-h-0 flex-1 min-h-[280px] p-4 flex flex-col">
-                <CandlestickChart
-                  symbol={selectedCoinSymbol}
-                  t={
-                    t as unknown as (
-                      key: string,
-                      params?: Record<string, string | number>,
-                    ) => string
-                  }
-                />
-              </div>
-            </div>
-          </main>
+          <MarketRightPanel
+            t={
+              t as unknown as (
+                key: string,
+                params?: Record<string, string | number>,
+              ) => string
+            }
+            coins={coins}
+            filteredCoins={filteredCoins}
+            displayUsdtToKrw={displayUsdtToKrw}
+            selectedExchange={selectedExchange}
+            nameColumnMode={nameColumnMode}
+            showHeaderSkeleton={showRightPanelHeaderSkeleton}
+          />
         </div>
       </div>
     </div>

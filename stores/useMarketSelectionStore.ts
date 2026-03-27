@@ -29,12 +29,9 @@ export const useMarketSelectionStore = create<MarketSelectionState>()(
           },
         }));
       },
+      /** 거래소만 바꿈. 선택 심볼은 상장 목록 로드 후 `page.tsx`에서 현재 심볼 유지 여부로 확정 */
       setSelectedExchangeAndRestoreSymbol: (exchange) => {
-        const restored = get().selectedSymbolByExchange[exchange] ?? "BTC";
-        set({
-          selectedExchange: exchange,
-          selectedSymbol: restored,
-        });
+        set({ selectedExchange: exchange });
       },
     }),
     {

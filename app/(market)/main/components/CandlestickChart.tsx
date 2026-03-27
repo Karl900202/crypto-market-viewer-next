@@ -52,6 +52,45 @@ const TIMEFRAME_LABEL_KEY: Record<ChartTimeframe, string> = {
 
 const BINANCE_WS = "wss://stream.binance.com:9443/ws";
 
+/**
+ * 국내 KRW 마켓 base 심볼 → Binance USDT 현물 티커 (예: BTC → BTCUSDT).
+ * `USDT` 단독은 `USDTUSDT`가 되어 무효이므로, 대리로 **USDCUSDT**(USDC의 USDT 가격) 사용.
+ * 이미 `…USDT` 형태면 그대로 사용 (중복 접미사 방지).
+ */
+function baseToBinanceUsdtSymbol(base: string): string | null {
+  const s = base.trim().toUpperCase();
+  if (!s) return null;
+  if (s === "USDT") return "USDCUSDT";
+  if (s.endsWith("USDT")) return s;
+  return `${s}USDT`;
+}
+
+const KLINES_FETCH_MAX_ATTEMPTS = 4;
+
+/** `/api/binance/klines` — 서버/네트워크 간헐 오류 시 재요청 */
+async function fetchKlinesApiWithRetry(url: string): Promise<Response> {
+  let last: Response | null = null;
+  for (let attempt = 0; attempt < KLINES_FETCH_MAX_ATTEMPTS; attempt++) {
+    const res = await fetch(url, { cache: "no-store" });
+    last = res;
+    if (res.ok) return res;
+    const retryable =
+      res.status === 400 ||
+      res.status === 429 ||
+      res.status === 502 ||
+      res.status === 503 ||
+      res.status === 504 ||
+      (res.status >= 500 && res.status < 600);
+    if (!retryable || attempt === KLINES_FETCH_MAX_ATTEMPTS - 1) {
+      return res;
+    }
+    await new Promise((r) =>
+      setTimeout(r, Math.min(2000, 350 * 2 ** attempt)),
+    );
+  }
+  return last!;
+}
+
 /** 직전 봉보다 거래량 많음(상승색) / 적음(하락색) — 코인 테이블과 동일 HEX */
 const VOL_UP = MARKET_COLOR_UP;
 const VOL_DOWN = MARKET_COLOR_DOWN;
@@ -405,10 +444,16 @@ function restoreVisibleLogicalPreserveBarCount(
 
 export type CandlestickChartProps = {
   symbol: string;
+  /** 기준 거래소 — USDT일 때 국내 KRW 캔들 소스 */
+  selectedExchange: string;
   t: (key: string, params?: Record<string, string | number>) => string;
 };
 
-export function CandlestickChart({ symbol, t }: CandlestickChartProps) {
+export function CandlestickChart({
+  symbol,
+  selectedExchange,
+  t,
+}: CandlestickChartProps) {
   const theme = useThemeStore((s) => s.theme);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -432,8 +477,36 @@ export function CandlestickChart({ symbol, t }: CandlestickChartProps) {
   const [wsLive, setWsLive] = useState(false);
 
   const binanceSymbol = useMemo(
-    () => `${symbol.trim().toUpperCase()}USDT`,
+    () => baseToBinanceUsdtSymbol(symbol),
     [symbol],
+  );
+
+  const domesticExchangeParam = useMemo(():
+    | "upbit"
+    | "bithumb"
+    | "coinone"
+    | null => {
+    switch (selectedExchange) {
+      case "업비트 KRW":
+        return "upbit";
+      case "빗썸 KRW":
+        return "bithumb";
+      case "코인원 KRW":
+        return "coinone";
+      default:
+        return null;
+    }
+  }, [selectedExchange]);
+
+  const isDomesticUsdt = useMemo(
+    () =>
+      symbol.trim().toUpperCase() === "USDT" && domesticExchangeParam !== null,
+    [symbol, domesticExchangeParam],
+  );
+
+  const showUsdcProxyCaption = useMemo(
+    () => symbol.trim().toUpperCase() === "USDT" && !isDomesticUsdt,
+    [symbol, isDomesticUsdt],
   );
 
   const binanceInterval = useMemo(
@@ -448,7 +521,18 @@ export function CandlestickChart({ symbol, t }: CandlestickChartProps) {
     if (!chart) return;
     chart.applyOptions(layoutForTheme(theme));
     applyPriceScaleMargins(chart, theme);
-  }, [theme]);
+    const vs = volumeSeriesRef.current;
+    if (vs) {
+      vs.applyOptions({
+        priceFormat: {
+          type: "volume",
+          ...(isDomesticUsdt
+            ? { precision: 0, minMove: 1 }
+            : { precision: 2, minMove: 0.01 }),
+        },
+      });
+    }
+  }, [theme, isDomesticUsdt]);
 
   useLayoutEffect(() => {
     const el = containerRef.current;
@@ -551,16 +635,350 @@ export function CandlestickChart({ symbol, t }: CandlestickChartProps) {
     applyTheme();
   }, [applyTheme]);
 
+  /** USDT + 국내 기준 거래소: KRW-USDT 캔들(REST + 주기 갱신) */
   useEffect(() => {
+    if (!isDomesticUsdt || !domesticExchangeParam) return;
+
+    let cancelled = false;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let visibleDebounce: ReturnType<typeof setTimeout> | null = null;
+    const ex = domesticExchangeParam;
+    const pair = `USDT-${ex}`;
+
+    function buildUrl(before?: number) {
+      let u = `/api/domestic/krw-usdt-candles?exchange=${encodeURIComponent(ex)}&timeframe=${encodeURIComponent(timeframe)}`;
+      if (before !== undefined) u += `&beforeTime=${before}`;
+      return u;
+    }
+
+    const onVisibleTimeRangeChange = () => {
+      if (visibleDebounce !== null) clearTimeout(visibleDebounce);
+      visibleDebounce = setTimeout(() => {
+        visibleDebounce = null;
+        if (cancelled) return;
+        const chart = chartRef.current;
+        if (!chart) return;
+        const merged = mergedCandlesRef.current;
+        if (merged.length === 0) return;
+
+        const logical = chart.timeScale().getVisibleLogicalRange();
+        let needPast =
+          logical !== null &&
+          Number.isFinite(logical.from) &&
+          logical.from < 30;
+
+        if (!needPast) {
+          const vr = chart.timeScale().getVisibleRange();
+          if (!vr) return;
+          const fromSec = timeToUnixSeconds(vr.from);
+          if (fromSec === null) return;
+          const oldest = merged[0].time;
+          needPast = fromSec < oldest;
+        }
+
+        if (needPast) {
+          void loadMorePast();
+        }
+      }, 200);
+    };
+
+    visibleRangeListenerRef.current = onVisibleTimeRangeChange;
+
+    async function loadMorePast() {
+      if (cancelled || loadingMorePastRef.current || noMorePastRef.current) {
+        return;
+      }
+      if (mergedCandlesRef.current.length === 0) return;
+
+      loadingMorePastRef.current = true;
+      try {
+        const oldest = mergedCandlesRef.current[0].time;
+        const res = await fetchKlinesApiWithRetry(buildUrl(oldest));
+        const json = (await res.json()) as {
+          candles?: CandleRow[];
+          error?: string;
+        };
+        if (!res.ok) {
+          throw new Error(json.error ?? `HTTP ${res.status}`);
+        }
+        const incoming = json.candles ?? [];
+        if (incoming.length === 0) {
+          noMorePastRef.current = true;
+          return;
+        }
+
+        const prevMap = new Map<number, CandleRow>();
+        for (const c of mergedCandlesRef.current) {
+          prevMap.set(c.time, c);
+        }
+        for (const c of incoming) {
+          if (!prevMap.has(c.time)) {
+            prevMap.set(c.time, {
+              time: c.time,
+              open: c.open,
+              high: c.high,
+              low: c.low,
+              close: c.close,
+              volumeQuote: c.volumeQuote ?? 0,
+            });
+          }
+        }
+        const next = [...prevMap.values()].sort((a, b) => a.time - b.time);
+        mergedCandlesRef.current = next;
+
+        const volMap = new Map<number, number>();
+        for (const c of next) {
+          volMap.set(c.time, c.volumeQuote);
+        }
+        volumeByTimeRef.current = volMap;
+
+        const s = seriesRef.current;
+        const vs = volumeSeriesRef.current;
+        const chart = chartRef.current;
+        if (!s || !chart) return;
+
+        const data: CandlestickData[] = next.map((c) => ({
+          time: c.time as UTCTimestamp,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+        }));
+        const saved = chart.timeScale().getVisibleRange();
+        s.setData(data);
+        vs?.setData(buildVolumeHistogramFromCandles(next));
+        if (saved) {
+          const fromSec = timeToUnixSeconds(saved.from);
+          const toSec = timeToUnixSeconds(saved.to);
+          if (fromSec !== null && toSec !== null && fromSec < toSec) {
+            chart.timeScale().setVisibleRange({
+              from: saved.from,
+              to: saved.to,
+            });
+          }
+        }
+      } catch {
+        /* ignore */
+      } finally {
+        loadingMorePastRef.current = false;
+      }
+    }
+
+    async function loadHistoryThenPoll() {
+      const oldBarCount = mergedCandlesRef.current.length;
+      const chartBefore = chartRef.current;
+      const prevView = prevLoadedViewRef.current;
+      const sameSymbolKeepZoom =
+        prevView !== null &&
+        prevView.symbol === pair &&
+        oldBarCount > 0 &&
+        chartBefore !== null;
+
+      let savedVisibleBefore: { from: Time; to: Time } | null = null;
+      let savedLogicalBefore: { from: number; to: number } | null = null;
+      if (sameSymbolKeepZoom) {
+        savedVisibleBefore = chartBefore.timeScale().getVisibleRange();
+        const lr = chartBefore.timeScale().getVisibleLogicalRange();
+        if (
+          lr !== null &&
+          Number.isFinite(lr.from) &&
+          Number.isFinite(lr.to)
+        ) {
+          savedLogicalBefore = { from: lr.from, to: lr.to };
+        }
+      }
+
+      setLoading(true);
+      setError(null);
+      setLegend(null);
+      setWsLive(false);
+      mergedCandlesRef.current = [];
+      volumeByTimeRef.current = new Map();
+      noMorePastRef.current = false;
+
+      const sClear = seriesRef.current;
+      const vsClear = volumeSeriesRef.current;
+      if (sClear) sClear.setData([]);
+      if (vsClear) vsClear.setData([]);
+
+      try {
+        const res = await fetchKlinesApiWithRetry(buildUrl());
+        const json = (await res.json()) as {
+          candles?: CandleRow[];
+          error?: string;
+        };
+
+        if (!res.ok) {
+          throw new Error(json.error ?? `HTTP ${res.status}`);
+        }
+
+        const candles = json.candles ?? [];
+        const volMap = new Map<number, number>();
+        const data: CandlestickData[] = candles.map((c) => {
+          volMap.set(c.time, c.volumeQuote ?? 0);
+          return {
+            time: c.time as UTCTimestamp,
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close,
+          };
+        });
+
+        if (cancelled) return;
+        volumeByTimeRef.current = volMap;
+        mergedCandlesRef.current = candles.map((c) => ({
+          time: c.time,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+          volumeQuote: c.volumeQuote ?? 0,
+        }));
+
+        const s = seriesRef.current;
+        const vs = volumeSeriesRef.current;
+        const chart = chartRef.current;
+        if (!s || !chart) return;
+
+        const prev = prevLoadedViewRef.current;
+        const sameSymbol = prev !== null && prev.symbol === pair;
+
+        s.setData(data);
+        const volHist = buildVolumeHistogramFromCandles(candles);
+        vs?.setData(volHist);
+
+        const logicalOk =
+          sameSymbol &&
+          savedLogicalBefore !== null &&
+          restoreVisibleLogicalPreserveBarCount(chart, data, savedLogicalBefore);
+        if (!logicalOk) {
+          restoreOrFitVisibleRange(
+            chart,
+            data,
+            savedVisibleBefore,
+            !sameSymbol,
+          );
+        }
+
+        prevLoadedViewRef.current = {
+          symbol: pair,
+          timeframe,
+        };
+
+        setWsLive(true);
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : t("chart.loadError"));
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    async function pollRefresh() {
+      if (cancelled) return;
+      try {
+        const res = await fetchKlinesApiWithRetry(buildUrl());
+        const json = (await res.json()) as { candles?: CandleRow[] };
+        if (!res.ok || !json.candles?.length) return;
+
+        const prevMap = new Map<number, CandleRow>();
+        for (const c of mergedCandlesRef.current) {
+          prevMap.set(c.time, c);
+        }
+        for (const c of json.candles) {
+          prevMap.set(c.time, {
+            time: c.time,
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close,
+            volumeQuote: c.volumeQuote ?? 0,
+          });
+        }
+        const next = [...prevMap.values()].sort((a, b) => a.time - b.time);
+        mergedCandlesRef.current = next;
+
+        const volMap = new Map<number, number>();
+        for (const c of next) {
+          volMap.set(c.time, c.volumeQuote);
+        }
+        volumeByTimeRef.current = volMap;
+
+        const s = seriesRef.current;
+        const vs = volumeSeriesRef.current;
+        const chart = chartRef.current;
+        if (!s || !chart) return;
+
+        const data: CandlestickData[] = next.map((c) => ({
+          time: c.time as UTCTimestamp,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+        }));
+        const saved = chart.timeScale().getVisibleRange();
+        s.setData(data);
+        vs?.setData(buildVolumeHistogramFromCandles(next));
+        if (saved) {
+          const fromSec = timeToUnixSeconds(saved.from);
+          const toSec = timeToUnixSeconds(saved.to);
+          if (fromSec !== null && toSec !== null && fromSec < toSec) {
+            chart.timeScale().setVisibleRange({
+              from: saved.from,
+              to: saved.to,
+            });
+          }
+        }
+        setWsLive(true);
+      } catch {
+        /* ignore */
+      }
+    }
+
+    void loadHistoryThenPoll();
+    pollTimer = setInterval(() => {
+      void pollRefresh();
+    }, 8000);
+
+    return () => {
+      cancelled = true;
+      visibleRangeListenerRef.current = () => {};
+      if (visibleDebounce !== null) clearTimeout(visibleDebounce);
+      if (pollTimer !== null) clearInterval(pollTimer);
+      setWsLive(false);
+    };
+  }, [isDomesticUsdt, domesticExchangeParam, timeframe, t]);
+
+  useEffect(() => {
+    if (isDomesticUsdt) return;
+
+    if (!binanceSymbol) {
+      mergedCandlesRef.current = [];
+      volumeByTimeRef.current = new Map();
+      const s0 = seriesRef.current;
+      const vs0 = volumeSeriesRef.current;
+      if (s0) s0.setData([]);
+      if (vs0) vs0.setData([]);
+      setLegend(null);
+      setLoading(false);
+      setError(t("chart.noBinanceUsdtPair"));
+      setWsLive(false);
+      return;
+    }
+
+    const pair = binanceSymbol;
+
     let cancelled = false;
     let ws: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const streamName = `${binanceSymbol.toLowerCase()}@kline_${binanceInterval}`;
+    const streamName = `${pair.toLowerCase()}@kline_${binanceInterval}`;
     const wsUrl = `${BINANCE_WS}/${streamName}`;
 
     function applyKlineUpdate(k: NonNullable<BinanceKlineWsPayload["k"]>) {
-      if (k.s !== binanceSymbol) return;
+      if (k.s !== pair) return;
       if (k.i !== binanceInterval) return;
 
       const timeSec = Math.floor(k.t / 1000) as UTCTimestamp;
@@ -632,9 +1050,8 @@ export function CandlestickChart({ symbol, t }: CandlestickChartProps) {
           if (merged.length === 0) break;
           const oldest = merged[0].time;
 
-          const res = await fetch(
-            `/api/binance/klines?symbol=${encodeURIComponent(binanceSymbol)}&interval=${encodeURIComponent(binanceInterval)}&beforeTime=${encodeURIComponent(String(oldest))}`,
-            { cache: "no-store" },
+          const res = await fetchKlinesApiWithRetry(
+            `/api/binance/klines?symbol=${encodeURIComponent(pair)}&interval=${encodeURIComponent(binanceInterval)}&beforeTime=${encodeURIComponent(String(oldest))}`,
           );
           const json = (await res.json()) as {
             candles?: {
@@ -793,18 +1210,45 @@ export function CandlestickChart({ symbol, t }: CandlestickChartProps) {
     }
 
     async function loadHistoryThenWs() {
+      const oldBarCount = mergedCandlesRef.current.length;
+      const chartBefore = chartRef.current;
+      const prevView = prevLoadedViewRef.current;
+      const sameSymbolKeepZoom =
+        prevView !== null &&
+        prevView.symbol === pair &&
+        oldBarCount > 0 &&
+        chartBefore !== null;
+
+      let savedVisibleBefore: { from: Time; to: Time } | null = null;
+      let savedLogicalBefore: { from: number; to: number } | null = null;
+      if (sameSymbolKeepZoom) {
+        savedVisibleBefore = chartBefore.timeScale().getVisibleRange();
+        const lr = chartBefore.timeScale().getVisibleLogicalRange();
+        if (
+          lr !== null &&
+          Number.isFinite(lr.from) &&
+          Number.isFinite(lr.to)
+        ) {
+          savedLogicalBefore = { from: lr.from, to: lr.to };
+        }
+      }
+
       setLoading(true);
       setError(null);
       setLegend(null);
       setWsLive(false);
-      const oldBarCount = mergedCandlesRef.current.length;
       mergedCandlesRef.current = [];
+      volumeByTimeRef.current = new Map();
       noMorePastRef.current = false;
 
+      const sClear = seriesRef.current;
+      const vsClear = volumeSeriesRef.current;
+      if (sClear) sClear.setData([]);
+      if (vsClear) vsClear.setData([]);
+
       try {
-        const res = await fetch(
-          `/api/binance/klines?symbol=${encodeURIComponent(binanceSymbol)}&interval=${encodeURIComponent(binanceInterval)}&range=${encodeURIComponent(rangeKey)}`,
-          { cache: "no-store" },
+        const res = await fetchKlinesApiWithRetry(
+          `/api/binance/klines?symbol=${encodeURIComponent(pair)}&interval=${encodeURIComponent(binanceInterval)}&range=${encodeURIComponent(rangeKey)}`,
         );
         const json = (await res.json()) as {
           candles?: {
@@ -852,15 +1296,7 @@ export function CandlestickChart({ symbol, t }: CandlestickChartProps) {
         if (!s || !chart) return;
 
         const prev = prevLoadedViewRef.current;
-        const sameSymbol = prev !== null && prev.symbol === binanceSymbol;
-
-        const savedVisible = sameSymbol
-          ? chart.timeScale().getVisibleRange()
-          : null;
-        const savedLogical =
-          sameSymbol && oldBarCount > 0
-            ? chart.timeScale().getVisibleLogicalRange()
-            : null;
+        const sameSymbol = prev !== null && prev.symbol === pair;
 
         s.setData(data);
         const volHist = buildVolumeHistogramFromCandles(candles);
@@ -868,14 +1304,19 @@ export function CandlestickChart({ symbol, t }: CandlestickChartProps) {
 
         const logicalOk =
           sameSymbol &&
-          savedLogical !== null &&
-          restoreVisibleLogicalPreserveBarCount(chart, data, savedLogical);
+          savedLogicalBefore !== null &&
+          restoreVisibleLogicalPreserveBarCount(chart, data, savedLogicalBefore);
         if (!logicalOk) {
-          restoreOrFitVisibleRange(chart, data, savedVisible, !sameSymbol);
+          restoreOrFitVisibleRange(
+            chart,
+            data,
+            savedVisibleBefore,
+            !sameSymbol,
+          );
         }
 
         prevLoadedViewRef.current = {
-          symbol: binanceSymbol,
+          symbol: pair,
           timeframe,
         };
 
@@ -903,7 +1344,7 @@ export function CandlestickChart({ symbol, t }: CandlestickChartProps) {
       }
       setWsLive(false);
     };
-  }, [binanceSymbol, binanceInterval, rangeKey, timeframe, t]);
+  }, [binanceSymbol, binanceInterval, rangeKey, timeframe, t, isDomesticUsdt]);
 
   const legendTimeStr = useMemo(() => {
     if (!legend) return "";
@@ -1001,8 +1442,19 @@ export function CandlestickChart({ symbol, t }: CandlestickChartProps) {
         </div>
 
         <div className="space-y-0.5 text-[13px] text-gray-500 dark:text-gray-400">
-          <p>{t("chart.binanceCaption")}</p>
-          {timeframeUses15mInsteadOf10m(timeframe) && (
+          <p>
+            {isDomesticUsdt
+              ? t("chart.captionDomesticUsdtKrw", {
+                  exchange: selectedExchange.replace(" KRW", ""),
+                })
+              : t("chart.binanceCaption")}
+          </p>
+          {showUsdcProxyCaption && (
+            <p className="text-[10px] text-amber-700/90 dark:text-amber-400/90">
+              {t("chart.captionUsdtUsdcProxy")}
+            </p>
+          )}
+          {!isDomesticUsdt && timeframeUses15mInsteadOf10m(timeframe) && (
             <p className="text-[10px] text-amber-700/90 dark:text-amber-400/90">
               {t("chart.caption10mAs15m")}
             </p>
@@ -1069,7 +1521,7 @@ export function CandlestickChart({ symbol, t }: CandlestickChartProps) {
               </span>
               <span className="text-right text-gray-900 dark:text-white">
                 {legend.volumeQuote != null
-                  ? `${formatVolumeQuote(legend.volumeQuote)} ${t("chart.volumeUnit")}`
+                  ? `${formatVolumeQuote(legend.volumeQuote)} ${t(isDomesticUsdt ? "chart.volumeUnitKrw" : "chart.volumeUnit")}`
                   : "—"}
               </span>
             </div>
@@ -1077,8 +1529,15 @@ export function CandlestickChart({ symbol, t }: CandlestickChartProps) {
         )}
 
         {loading && (
-          <div className="absolute inset-0 z-[3] flex items-center justify-center rounded-lg bg-white/60 text-sm text-gray-600 backdrop-blur-[1px] dark:bg-gray-900/50 dark:text-gray-300">
-            {t("chart.loading")}
+          <div
+            className="absolute inset-0 z-[3] flex items-center justify-center rounded-lg bg-white/88 backdrop-blur-[1px] dark:bg-gray-900/88"
+            role="status"
+            aria-label={t("chart.loading")}
+          >
+            <div
+              className="h-11 w-11 animate-spin rounded-full border-[3px] border-yellow-400 border-t-transparent"
+              aria-hidden
+            />
           </div>
         )}
         {error && (

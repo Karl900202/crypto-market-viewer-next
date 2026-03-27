@@ -71,6 +71,38 @@ function mapRow(row: BinanceKlineRow): KlineCandleJson {
   };
 }
 
+const BINANCE_FETCH_MAX_ATTEMPTS = 4;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Binance가 간헐적으로 400/429/5xx를 주는 경우 재시도 */
+async function fetchBinanceKlinesJsonWithRetry(
+  url: string,
+): Promise<BinanceKlineRow[]> {
+  let lastStatus = 0;
+  for (let attempt = 0; attempt < BINANCE_FETCH_MAX_ATTEMPTS; attempt++) {
+    const response = await fetch(url, {
+      next: { revalidate: 0 },
+    });
+    lastStatus = response.status;
+    if (response.ok) {
+      return (await response.json()) as BinanceKlineRow[];
+    }
+    const retryable =
+      response.status === 400 ||
+      response.status === 418 ||
+      response.status === 429 ||
+      (response.status >= 500 && response.status < 600);
+    if (!retryable || attempt === BINANCE_FETCH_MAX_ATTEMPTS - 1) {
+      throw new Error(`Binance error: ${response.status}`);
+    }
+    await sleep(Math.min(2000, 350 * 2 ** attempt));
+  }
+  throw new Error(`Binance error: ${lastStatus}`);
+}
+
 async function fetchKlinesPage(
   symbol: string,
   interval: string,
@@ -83,15 +115,7 @@ async function fetchKlinesPage(
   url.searchParams.set("endTime", String(endTime));
   url.searchParams.set("limit", String(limit));
 
-  const response = await fetch(url.toString(), {
-    next: { revalidate: 0 },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Binance error: ${response.status}`);
-  }
-
-  return (await response.json()) as BinanceKlineRow[];
+  return fetchBinanceKlinesJsonWithRetry(url.toString());
 }
 
 const BEFORE_TIME_MAX_PAGES = 12;
@@ -225,18 +249,13 @@ export async function GET(request: NextRequest) {
     url.searchParams.set("interval", interval);
     url.searchParams.set("limit", String(limit));
 
-    const response = await fetch(url.toString(), {
-      next: { revalidate: 0 },
-    });
-
-    if (!response.ok) {
-      return NextResponse.json(
-        { error: `Binance error: ${response.status}` },
-        { status: 502 },
-      );
+    let raw: BinanceKlineRow[];
+    try {
+      raw = await fetchBinanceKlinesJsonWithRetry(url.toString());
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Binance request failed";
+      return NextResponse.json({ error: msg }, { status: 502 });
     }
-
-    const raw = (await response.json()) as BinanceKlineRow[];
     const candles: KlineCandleJson[] = raw.map(mapRow);
 
     return NextResponse.json({ candles });

@@ -12,6 +12,7 @@ export type TranslationKey =
   | "market.totalCoins"
   | "market.searchPlaceholder"
   | "market.exchangeLoading"
+  | "market.shellLoading"
   | "market.connectionPending"
   | "market.connectionFailed"
   | "market.retryConnect"
@@ -28,11 +29,14 @@ export type TranslationKey =
   | "table.lowDiff"
   | "table.volume24h"
   | "market.binanceUsdtMarket"
+  | "market.usdtKrwChartSubtitle"
   | "chart.placeholderTitle"
   | "chart.placeholderSubtitle"
   | "chart.binanceCaption"
+  | "chart.captionDomesticUsdtKrw"
   | "chart.loading"
   | "chart.loadError"
+  | "chart.noBinanceUsdtPair"
   | "chart.rangeTitle"
   | "chart.detailTitle"
   | "chart.timeframeTitle"
@@ -49,6 +53,7 @@ export type TranslationKey =
   | "chart.int30m"
   | "chart.int60m"
   | "chart.wsLive"
+  | "chart.captionUsdtUsdcProxy"
   | "chart.caption10mAs15m"
   | "chart.legendO"
   | "chart.legendH"
@@ -56,7 +61,8 @@ export type TranslationKey =
   | "chart.legendC"
   | "chart.legendV"
   | "chart.volumePaneTitle"
-  | "chart.volumeUnit";
+  | "chart.volumeUnit"
+  | "chart.volumeUnitKrw";
 
 export const translations: Record<Locale, Record<TranslationKey, string>> = {
   ko: {
@@ -72,6 +78,7 @@ export const translations: Record<Locale, Record<TranslationKey, string>> = {
     "market.totalCoins": "암호화폐 총 {count}개",
     "market.searchPlaceholder": "Q BTC, 비트코인",
     "market.exchangeLoading": "{exchange} 거래소 데이터 로딩 중...",
+    "market.shellLoading": "시세 목록·차트 준비 중…",
     "market.connectionPending": "연결 준비 중…",
     "market.connectionFailed": "연결이 원활하지 않아요.",
     "market.retryConnect": "재연결",
@@ -88,13 +95,19 @@ export const translations: Record<Locale, Record<TranslationKey, string>> = {
     "table.lowDiff": "저가대비(전일)",
     "table.volume24h": "거래대금",
     "market.binanceUsdtMarket": "바이낸스 USDT 마켓",
+    "market.usdtKrwChartSubtitle":
+      "USDT/KRW · {exchange} KRW 캔들 (기준 거래소)",
     "chart.placeholderTitle": "Chart 영역 (추후 추가)",
     "chart.placeholderSubtitle":
       "여기에 차트/오더북/호가 등 위젯을 넣을 수 있어요.",
     "chart.binanceCaption":
       "바이낸스 USDT · 히스토리 로드 후 WebSocket으로 실시간 반영",
+    "chart.captionDomesticUsdtKrw":
+      "{exchange} KRW 현물 · REST 캔들 · 주기 갱신",
     "chart.loading": "차트 불러오는 중…",
     "chart.loadError": "캔들을 불러오지 못했어요.",
+    "chart.noBinanceUsdtPair":
+      "이 캔들 차트는 바이낸스 USDT 현물 쌍(예: BTCUSDT) 데이터만 쓰는데, 이 종목에 맞는 쌍이 없어 캔들을 그릴 수 없어요.",
     "chart.rangeTitle": "범위",
     "chart.detailTitle": "봉",
     "chart.timeframeTitle": "봉",
@@ -111,6 +124,8 @@ export const translations: Record<Locale, Record<TranslationKey, string>> = {
     "chart.int30m": "30분",
     "chart.int60m": "60분",
     "chart.wsLive": "실시간",
+    "chart.captionUsdtUsdcProxy":
+      "※ USDT/USDT 현물 쌍은 없어 USDC/USDT(USDC의 USDT 가격) 캔들을 표시합니다.",
     "chart.caption10mAs15m":
       "※ 10분: 바이낸스에 10분 봉 없음 → 15분 봉으로 표시",
     "chart.legendO": "시",
@@ -120,6 +135,7 @@ export const translations: Record<Locale, Record<TranslationKey, string>> = {
     "chart.legendV": "거래량",
     "chart.volumePaneTitle": "거래량",
     "chart.volumeUnit": "USDT",
+    "chart.volumeUnitKrw": "KRW",
   },
   en: {
     "nav.home": "Home",
@@ -134,6 +150,7 @@ export const translations: Record<Locale, Record<TranslationKey, string>> = {
     "market.totalCoins": "Total coins: {count}",
     "market.searchPlaceholder": "Search: BTC, Bitcoin",
     "market.exchangeLoading": "Loading {exchange} market data...",
+    "market.shellLoading": "Loading market list & chart…",
     "market.connectionPending": "Connecting…",
     "market.connectionFailed": "Connection is unstable.",
     "market.retryConnect": "Reconnect",
@@ -150,13 +167,19 @@ export const translations: Record<Locale, Record<TranslationKey, string>> = {
     "table.lowDiff": "From low (24h)",
     "table.volume24h": "Turnover",
     "market.binanceUsdtMarket": "Binance USDT market",
+    "market.usdtKrwChartSubtitle":
+      "USDT/KRW · {exchange} KRW candles (base exchange)",
     "chart.placeholderTitle": "Chart area (coming soon)",
     "chart.placeholderSubtitle":
       "You can add chart/order book widgets here later.",
     "chart.binanceCaption":
       "Binance USDT · history via REST, live updates via WebSocket",
+    "chart.captionDomesticUsdtKrw":
+      "{exchange} KRW spot · REST candles · periodic refresh",
     "chart.loading": "Loading candles…",
     "chart.loadError": "Could not load candles.",
+    "chart.noBinanceUsdtPair":
+      "This chart uses Binance USDT spot pairs (e.g. BTCUSDT). There is no matching pair for this asset, so candles cannot be drawn.",
     "chart.rangeTitle": "Range",
     "chart.detailTitle": "Interval",
     "chart.timeframeTitle": "Interval",
@@ -173,6 +196,8 @@ export const translations: Record<Locale, Record<TranslationKey, string>> = {
     "chart.int30m": "30m",
     "chart.int60m": "60m",
     "chart.wsLive": "Live",
+    "chart.captionUsdtUsdcProxy":
+      "※ No USDT/USDT spot pair — showing USDC/USDT (USDC price in USDT) candles.",
     "chart.caption10mAs15m": "※ 10m: Binance has no 10m candle → 15m stream",
     "chart.legendO": "O",
     "chart.legendH": "H",
@@ -181,6 +206,7 @@ export const translations: Record<Locale, Record<TranslationKey, string>> = {
     "chart.legendV": "Vol",
     "chart.volumePaneTitle": "Volume",
     "chart.volumeUnit": "USDT",
+    "chart.volumeUnitKrw": "KRW",
   },
 };
 
