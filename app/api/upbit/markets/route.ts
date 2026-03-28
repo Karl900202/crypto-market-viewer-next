@@ -1,10 +1,5 @@
 import { NextResponse } from "next/server";
-
-type UpbitMarket = {
-  market: string;
-  korean_name: string;
-  english_name: string;
-};
+import type { UpbitMarketRow } from "@/lib/market-api-types";
 
 export async function GET() {
   try {
@@ -20,7 +15,7 @@ export async function GET() {
       );
     }
 
-    const data = (await response.json()) as UpbitMarket[];
+    const data = (await response.json()) as UpbitMarketRow[];
     const krwMarkets = data.filter((m) => m.market.startsWith("KRW-"));
     return NextResponse.json(krwMarkets);
   } catch (error) {

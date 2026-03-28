@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { KRW_EXCHANGE } from "@/lib/krw-exchange";
 
 export const MARKET_SELECTION_STORAGE_KEY = "crypto-viewer-market-selection";
 
@@ -16,7 +17,7 @@ type MarketSelectionState = {
 export const useMarketSelectionStore = create<MarketSelectionState>()(
   persist(
     (set, get) => ({
-      selectedExchange: "업비트 KRW",
+      selectedExchange: KRW_EXCHANGE.UPBIT,
       selectedSymbol: "BTC",
       selectedSymbolByExchange: {},
       setSelectedSymbol: (symbol) => {

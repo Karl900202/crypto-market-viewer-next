@@ -31,6 +31,7 @@ import {
   timeframeToRangeKey,
   timeframeUses15mInsteadOf10m,
 } from "@/lib/chart-timeframe";
+import { KRW_EXCHANGE } from "@/lib/krw-exchange";
 import { MARKET_COLOR_DOWN, MARKET_COLOR_UP } from "@/lib/market-colors";
 import { useThemeStore } from "@/stores/useThemeStore";
 
@@ -487,11 +488,11 @@ export function CandlestickChart({
     | "coinone"
     | null => {
     switch (selectedExchange) {
-      case "업비트 KRW":
+      case KRW_EXCHANGE.UPBIT:
         return "upbit";
-      case "빗썸 KRW":
+      case KRW_EXCHANGE.BITHUMB:
         return "bithumb";
-      case "코인원 KRW":
+      case KRW_EXCHANGE.COINONE:
         return "coinone";
       default:
         return null;

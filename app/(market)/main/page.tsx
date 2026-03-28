@@ -15,10 +15,8 @@ import type { NameColumnMode } from "@/lib/name-column-mode";
 import { hasStableSortDataForAll, sortDisplayCoins } from "@/lib/coin-sort";
 import { useMarketSelectionStore } from "@/stores/useMarketSelectionStore";
 import { useFavoriteCoinsStore } from "@/stores/useFavoriteCoinsStore";
-import {
-  fetchBinanceUsdtPricesJson,
-  loadUpbitMarketsJson,
-} from "@/lib/market-bootstrap-fetch";
+import { KRW_EXCHANGE } from "@/lib/krw-exchange";
+import { loadBinanceUsdtPrices, loadUpbitMarkets } from "@/lib/market-bootstrap";
 import {
   CoinListTable,
   type SortKey,
@@ -208,11 +206,11 @@ export default function MainPage() {
       try {
         const ensureUpbitNameMap = async () => {
           if (upbitNameMapRef.current.size > 0) return;
-          const markets = await loadUpbitMarketsJson();
+          const markets = await loadUpbitMarkets();
           upbitNameMapRef.current = new Map(
             markets.map((m) => [m.market.split("-")[1], m.korean_name]),
           );
-          if (exchangeForThisLoad === "업비트 KRW") {
+          if (exchangeForThisLoad === KRW_EXCHANGE.UPBIT) {
             upbitMarketsRef.current = markets.map((m) => m.market);
           }
         };
@@ -220,8 +218,8 @@ export default function MainPage() {
         // 빗썸도 한글명을 위해 업비트 마켓 목록을 "이름 사전"으로 재사용
         await ensureUpbitNameMap();
 
-        if (exchangeForThisLoad === "업비트 KRW") {
-          const markets = await loadUpbitMarketsJson();
+        if (exchangeForThisLoad === KRW_EXCHANGE.UPBIT) {
+          const markets = await loadUpbitMarkets();
           upbitMarketsRef.current = markets.map((m) => m.market);
 
           const map = new Map<string, CoinData>();
@@ -233,7 +231,7 @@ export default function MainPage() {
           coinsRef.current = map;
           setCoins(map);
           triggerCoinsStateSyncRef.current?.();
-        } else if (exchangeForThisLoad === "빗썸 KRW") {
+        } else if (exchangeForThisLoad === KRW_EXCHANGE.BITHUMB) {
           // 빗썸: ALL_KRW 티커 keys가 상장 목록 역할
           const res = await fetch("/api/bithumb/all-krw");
           if (!res.ok) throw new Error("Failed to fetch bithumb tickers");
@@ -251,7 +249,7 @@ export default function MainPage() {
           coinsRef.current = map;
           setCoins(map);
           triggerCoinsStateSyncRef.current?.();
-        } else if (exchangeForThisLoad === "코인원 KRW") {
+        } else if (exchangeForThisLoad === KRW_EXCHANGE.COINONE) {
           // 코인원: ticker_new/KRW 응답의 tickers 배열이 상장 목록
           const res = await fetch("/api/coinone/all-krw");
           if (!res.ok) throw new Error("Failed to fetch coinone tickers");
@@ -330,7 +328,7 @@ export default function MainPage() {
     let interval: NodeJS.Timeout | null = null;
     const fetchPrices = async () => {
       try {
-        const json = await fetchBinanceUsdtPricesJson();
+        const json = await loadBinanceUsdtPrices();
         binancePricesRef.current = new Map(Object.entries(json.prices ?? {}));
         triggerCoinsStateSyncRef.current?.();
       } catch {
@@ -351,15 +349,15 @@ export default function MainPage() {
     setShowExchangeLoading(true);
     setIsDomesticReady(false);
     isDomesticReadyRef.current = false;
-    if (selectedExchange !== "업비트 KRW") {
+    if (selectedExchange !== KRW_EXCHANGE.UPBIT) {
       setUpbitConnectionStatus("idle");
       upbitConnectionStatusRef.current = "idle";
     }
-    if (selectedExchange !== "빗썸 KRW") {
+    if (selectedExchange !== KRW_EXCHANGE.BITHUMB) {
       setBithumbConnectionStatus("idle");
       bithumbConnectionStatusRef.current = "idle";
     }
-    if (selectedExchange !== "코인원 KRW") {
+    if (selectedExchange !== KRW_EXCHANGE.COINONE) {
       setCoinoneConnectionStatus("idle");
       coinoneConnectionStatusRef.current = "idle";
     }
@@ -533,7 +531,7 @@ export default function MainPage() {
           hideLoadingAfterMinTime,
         };
 
-        if (selectedExchange === "업비트 KRW") {
+        if (selectedExchange === KRW_EXCHANGE.UPBIT) {
           cleanupDomesticExchange = setupDomesticExchangeConnection(
             "upbit",
             domesticExchangeWorkerUrls.upbit,
@@ -543,7 +541,7 @@ export default function MainPage() {
               setStatus: setUpbitConnectionStatus,
             },
           );
-        } else if (selectedExchange === "빗썸 KRW") {
+        } else if (selectedExchange === KRW_EXCHANGE.BITHUMB) {
           cleanupDomesticExchange = setupDomesticExchangeConnection(
             "bithumb",
             domesticExchangeWorkerUrls.bithumb,
@@ -553,7 +551,7 @@ export default function MainPage() {
               setStatus: setBithumbConnectionStatus,
             },
           );
-        } else if (selectedExchange === "코인원 KRW") {
+        } else if (selectedExchange === KRW_EXCHANGE.COINONE) {
           cleanupDomesticExchange = setupDomesticExchangeConnection(
             "coinone",
             domesticExchangeWorkerUrls.coinone,
@@ -690,9 +688,9 @@ export default function MainPage() {
                       }
                       className="shrink-0 rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[14px] text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                     >
-                      <option value="업비트 KRW">업비트 KRW</option>
-                      <option value="빗썸 KRW">빗썸 KRW</option>
-                      <option value="코인원 KRW">코인원 KRW</option>
+                      <option value={KRW_EXCHANGE.UPBIT}>{KRW_EXCHANGE.UPBIT}</option>
+                      <option value={KRW_EXCHANGE.BITHUMB}>{KRW_EXCHANGE.BITHUMB}</option>
+                      <option value={KRW_EXCHANGE.COINONE}>{KRW_EXCHANGE.COINONE}</option>
                     </select>
                   </div>
 

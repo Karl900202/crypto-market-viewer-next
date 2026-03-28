@@ -13,6 +13,7 @@ import {
   type ConnectionStatus,
   type DomesticExchangeKind,
 } from "@/lib/domestic-exchange-timing";
+import { KRW_EXCHANGE } from "@/lib/krw-exchange";
 
 /** @public 타이밍 상수 재노출 (한 곳에서 import 가능) */
 export { DOMESTIC_EXCHANGE_TIMING } from "@/lib/domestic-exchange-timing";
@@ -20,9 +21,9 @@ export { DOMESTIC_EXCHANGE_TIMING } from "@/lib/domestic-exchange-timing";
 const T = DOMESTIC_EXCHANGE_TIMING;
 
 const LABEL: Record<DomesticExchangeKind, string> = {
-  upbit: "업비트 KRW",
-  bithumb: "빗썸 KRW",
-  coinone: "코인원 KRW",
+  upbit: KRW_EXCHANGE.UPBIT,
+  bithumb: KRW_EXCHANGE.BITHUMB,
+  coinone: KRW_EXCHANGE.COINONE,
 };
 
 export interface DomesticExchangeConnectionDeps {
