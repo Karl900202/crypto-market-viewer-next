@@ -16,6 +16,10 @@ import { hasStableSortDataForAll, sortDisplayCoins } from "@/lib/coin-sort";
 import { useMarketSelectionStore } from "@/stores/useMarketSelectionStore";
 import { useFavoriteCoinsStore } from "@/stores/useFavoriteCoinsStore";
 import {
+  fetchBinanceUsdtPricesJson,
+  loadUpbitMarketsJson,
+} from "@/lib/market-bootstrap-fetch";
+import {
   CoinListTable,
   type SortKey,
   type SortState,
@@ -61,13 +65,6 @@ function mergeIncrementalCoinsState(
   }
   return changed ? next : prev;
 }
-
-// 거래소 DTO는 lib/domestic-ticker-vm.ts의 mapper에서 변환됨
-type UpbitMarket = {
-  market: string; // e.g. KRW-BTC
-  korean_name: string;
-  english_name: string;
-};
 
 // 유틸리티 함수들
 const MIN_LOADING_DISPLAY_TIME = 200; // 최소 로딩 표시 시간 (ms)
@@ -211,13 +208,10 @@ export default function MainPage() {
       try {
         const ensureUpbitNameMap = async () => {
           if (upbitNameMapRef.current.size > 0) return;
-          const res = await fetch("/api/upbit/markets");
-          if (!res.ok) throw new Error("Failed to fetch upbit markets");
-          const markets = (await res.json()) as UpbitMarket[];
+          const markets = await loadUpbitMarketsJson();
           upbitNameMapRef.current = new Map(
             markets.map((m) => [m.market.split("-")[1], m.korean_name]),
           );
-          // 업비트 마켓 코드 목록은 업비트 기준일 때만 필요
           if (exchangeForThisLoad === "업비트 KRW") {
             upbitMarketsRef.current = markets.map((m) => m.market);
           }
@@ -227,11 +221,7 @@ export default function MainPage() {
         await ensureUpbitNameMap();
 
         if (exchangeForThisLoad === "업비트 KRW") {
-          // 업비트 기준: 이미 ensureUpbitNameMap()에서 name map이 채워짐.
-          // markets 목록은 다시 불러오지 않고, upbitMarketsRef.current를 사용.
-          const res = await fetch("/api/upbit/markets");
-          if (!res.ok) throw new Error("Failed to fetch upbit markets");
-          const markets = (await res.json()) as UpbitMarket[];
+          const markets = await loadUpbitMarketsJson();
           upbitMarketsRef.current = markets.map((m) => m.market);
 
           const map = new Map<string, CoinData>();
@@ -340,9 +330,7 @@ export default function MainPage() {
     let interval: NodeJS.Timeout | null = null;
     const fetchPrices = async () => {
       try {
-        const res = await fetch("/api/binance/prices?quote=USDT");
-        if (!res.ok) return;
-        const json = (await res.json()) as { prices: Record<string, number> };
+        const json = await fetchBinanceUsdtPricesJson();
         binancePricesRef.current = new Map(Object.entries(json.prices ?? {}));
         triggerCoinsStateSyncRef.current?.();
       } catch {

@@ -22,7 +22,7 @@ export default function Header() {
       <div className="mx-auto flex h-16 w-full max-w-[1400px] items-center justify-between px-4">
         {/* Left: logo + nav */}
         <div className="flex min-w-0 shrink-0 items-center gap-8 ml-8">
-          <Link href="/" className="shrink-0 text-xl font-bold text-yellow-400">
+          <Link href="/main" className="shrink-0 text-xl font-bold text-yellow-400">
             KORP
           </Link>
         </div>
