@@ -13,6 +13,7 @@ import { setupDomesticExchangeConnection } from "@/lib/setup-domestic-exchange-c
 import { getCoinEnglishDisplayName } from "@/lib/coin-english-display-name";
 import type { NameColumnMode } from "@/lib/name-column-mode";
 import { hasStableSortDataForAll, sortDisplayCoins } from "@/lib/coin-sort";
+import { useMarketLayoutResponsive } from "@/hooks/useMarketLayoutResponsive";
 import { useMarketSelectionStore } from "@/stores/useMarketSelectionStore";
 import { useFavoriteCoinsStore } from "@/stores/useFavoriteCoinsStore";
 import { KRW_EXCHANGE } from "@/lib/krw-exchange";
@@ -143,6 +144,9 @@ export default function MainPage() {
   sortRef.current = sort;
   const [nameColumnMode, setNameColumnMode] =
     useState<NameColumnMode>("korean");
+  const { isStacked } = useMarketLayoutResponsive();
+  /** 모바일만: 목록 ↔ 차트 전환 · 데스크톱은 항상 좌우 분할 */
+  const [mobileChartOpen, setMobileChartOpen] = useState(false);
   const exchangeLoadingStartTimeRef = useRef<number | null>(null);
   const [, setShowExchangeLoading] = useState(false);
   const [isDomesticReady, setIsDomesticReady] = useState(false);
@@ -195,6 +199,14 @@ export default function MainPage() {
     setDisplayUsdtToKrw(newRate);
     triggerCoinsStateSyncRef.current?.();
   }, []);
+
+  useEffect(() => {
+    if (!isStacked) setMobileChartOpen(false);
+  }, [isStacked]);
+
+  useEffect(() => {
+    setMobileChartOpen(false);
+  }, [selectedExchange]);
 
   // 실시간 환율 가져오기 (10초 마다 업데이트, useRef 사용)
   const usdtToKrwRateRef = useExchangeRate(10 * 1000, 1400, handleRateChange);
@@ -658,9 +670,13 @@ export default function MainPage() {
     [displayUsdtToKrw, favorites, filteredCoins],
   );
 
-  const onSelectSymbol = useCallback((symbol: string) => {
-    setSelectedSymbol(symbol);
-  }, [setSelectedSymbol]);
+  const onSelectSymbol = useCallback(
+    (symbol: string) => {
+      setSelectedSymbol(symbol);
+      if (isStacked) setMobileChartOpen(true);
+    },
+    [setSelectedSymbol, isStacked],
+  );
   const onToggleFavorite = useCallback(
     (symbol: string) => {
       toggleFavorite(symbol);
@@ -669,12 +685,15 @@ export default function MainPage() {
   );
 
   return (
-    <div className="h-full overflow-hidden bg-gray-100 text-gray-900 dark:bg-gray-950 dark:text-white">
+    <div className="h-full overflow-hidden bg-background text-foreground">
       <div className="flex h-full w-full min-h-0">
-        <div className="flex h-full min-h-0 w-full gap-4">
-          {/* Left: market list — 종목명 한 줄 표시를 위해 폭 여유 */}
-          <aside className="flex w-[462px] shrink-0 flex-col overflow-hidden border-r border-[#e5e8eb] bg-white dark:border-gray-800 dark:bg-gray-900 min-h-0 min-w-0">
-            <div className="shrink-0 border-b border-[#e5e8eb] px-3 py-3 dark:border-gray-800">
+        <div className="flex h-full min-h-0 w-full flex-col gap-0 md:flex-row md:gap-4">
+          <aside
+            className={`flex w-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background md:w-[462px] md:shrink-0 md:flex-none ${
+              mobileChartOpen ? "max-md:hidden" : ""
+            } ${mobileChartOpen && isStacked ? "md:hidden" : ""}`}
+          >
+            <div className="shrink-0 px-3 py-3">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="flex min-w-0 items-center gap-2">
@@ -686,7 +705,7 @@ export default function MainPage() {
                       onChange={(e) =>
                         setSelectedExchangeAndRestoreSymbol(e.target.value)
                       }
-                      className="shrink-0 rounded border border-gray-200 bg-gray-50 px-3 py-2 text-[14px] text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                      className="shrink-0 rounded bg-muted px-3 py-2 text-[14px] text-foreground focus:outline-none focus:ring-2 focus:ring-yellow-400"
                     >
                       <option value={KRW_EXCHANGE.UPBIT}>{KRW_EXCHANGE.UPBIT}</option>
                       <option value={KRW_EXCHANGE.BITHUMB}>{KRW_EXCHANGE.BITHUMB}</option>
@@ -722,7 +741,7 @@ export default function MainPage() {
                     placeholder={t("market.searchPlaceholder")}
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full rounded border border-gray-200 bg-gray-50 py-1.5 pl-8 pr-2.5 text-xs text-gray-900 focus:border-yellow-400 focus:outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                    className="w-full rounded bg-muted py-1.5 pl-8 pr-2.5 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-yellow-400"
                   />
                   <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-400">
                     ⌕
@@ -731,7 +750,7 @@ export default function MainPage() {
               </div>
             </div>
 
-            <div className="relative flex-1 min-h-0 min-w-0 overflow-hidden flex flex-col">
+            <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
               <CoinListTable
                 t={
                   t as unknown as (
@@ -749,11 +768,15 @@ export default function MainPage() {
                 onToggleFavorite={onToggleFavorite}
                 nameColumnMode={nameColumnMode}
                 onToggleNameColumnMode={toggleNameColumnMode}
+                listLayout={isStacked ? "stacked" : "split"}
               />
             </div>
           </aside>
 
           <MarketRightPanel
+            className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${
+              !mobileChartOpen ? "max-md:hidden" : ""
+            } ${!mobileChartOpen && isStacked ? "md:hidden" : ""}`}
             t={
               t as unknown as (
                 key: string,
@@ -766,6 +789,12 @@ export default function MainPage() {
             selectedExchange={selectedExchange}
             nameColumnMode={nameColumnMode}
             showHeaderSkeleton={showRightPanelHeaderSkeleton}
+            mobileChartMode={Boolean(isStacked && mobileChartOpen)}
+            onMobileBack={
+              isStacked && mobileChartOpen
+                ? () => setMobileChartOpen(false)
+                : undefined
+            }
           />
         </div>
       </div>

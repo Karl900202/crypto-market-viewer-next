@@ -23,7 +23,7 @@ export const CoinListExchangePending = memo(function CoinListExchangePending({
 
   return (
     <div className="p-4 font-normal">
-      <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-3">
+      <div className="rounded-xl bg-background p-3">
         <div className="flex items-start gap-3">
           <div className={`mt-0.5 shrink-0 ${iconClass}`} aria-hidden="true">
             <svg viewBox="0 0 24 24" width="18" height="18">

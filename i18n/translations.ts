@@ -17,6 +17,8 @@ export type TranslationKey =
   | "market.connectionFailed"
   | "market.retryConnect"
   | "market.staleDataHidden"
+  | "market.mobileBackToList"
+  | "market.mobileBackAria"
   | "table.name"
   | "table.nameHeaderKorean"
   | "table.nameHeaderEnglish"
@@ -83,6 +85,8 @@ export const translations: Record<Locale, Record<TranslationKey, string>> = {
     "market.connectionFailed": "연결이 원활하지 않아요.",
     "market.retryConnect": "재연결",
     "market.staleDataHidden": "이전 데이터는 숨겼어요. 재연결 후 표시됩니다.",
+    "market.mobileBackToList": "목록",
+    "market.mobileBackAria": "코인 목록으로 돌아가기",
     "table.name": "한글명",
     "table.nameHeaderKorean": "한글명",
     "table.nameHeaderEnglish": "영문명",
@@ -155,6 +159,8 @@ export const translations: Record<Locale, Record<TranslationKey, string>> = {
     "market.connectionFailed": "Connection is unstable.",
     "market.retryConnect": "Reconnect",
     "market.staleDataHidden": "Previous data is hidden until reconnection.",
+    "market.mobileBackToList": "List",
+    "market.mobileBackAria": "Back to coin list",
     "table.name": "Name",
     "table.nameHeaderKorean": "Korean name",
     "table.nameHeaderEnglish": "English name",

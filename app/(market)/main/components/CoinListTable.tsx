@@ -10,7 +10,8 @@ import {
 } from "@/lib/format-price";
 import {
   CoinRow,
-  COIN_LIST_ROW_GRID_CLASS,
+  coinListRowGridClass,
+  type CoinListLayoutVariant,
   type PriceFlashDir,
 } from "./CoinRow";
 import {
@@ -48,6 +49,8 @@ export type CoinListTableProps = {
   onToggleFavorite: (symbol: string) => void;
   nameColumnMode: NameColumnMode;
   onToggleNameColumnMode: () => void;
+  /** split: 좌우 분할 / stacked: 목록·차트 전환(좁은 폭·그리드 최적화) */
+  listLayout: CoinListLayoutVariant;
 };
 
 /** 위·아래 화살표 항상 동시 표시, 정렬 방향은 삼각형 색으로만 구분 */
@@ -190,8 +193,10 @@ export const CoinListTable = memo(function CoinListTable(
     onToggleFavorite,
     nameColumnMode,
     onToggleNameColumnMode,
+    listLayout,
   } = props;
 
+  const rowGridClass = coinListRowGridClass(listLayout);
   const showEmptyState = !isDomesticReady || !isListDataReady;
   const scrollParentRef = useRef<HTMLDivElement>(null);
   const getScrollElement = useCallback(
@@ -209,10 +214,15 @@ export const CoinListTable = memo(function CoinListTable(
   return (
     <div
       ref={scrollParentRef}
-      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overflow-x-auto modern-scrollbar"
+      className="modern-scrollbar flex h-full min-h-0 min-w-0 flex-1 touch-pan-y flex-col overflow-y-auto overflow-x-auto overscroll-y-contain [-webkit-overflow-scrolling:touch]"
     >
       <div
-        className={`sticky top-0 z-[1] w-full min-w-0 font-normal ${COIN_LIST_ROW_GRID_CLASS} border-b border-[#e5e8eb] bg-[#f9fafb] px-3 py-2 dark:border-gray-800 dark:bg-gray-800/90`}
+        className={
+          listLayout === "stacked" ? "min-w-[320px] w-max max-w-none" : "min-w-0"
+        }
+      >
+      <div
+        className={`sticky top-0 z-[1] w-full min-w-0 font-normal ${rowGridClass} bg-muted px-3 py-2`}
       >
         <NameColumnHeader
           nameColumnMode={nameColumnMode}
@@ -251,7 +261,7 @@ export const CoinListTable = memo(function CoinListTable(
       </div>
 
       {showEmptyState ? (
-        <CoinListSkeletonBody />
+        <CoinListSkeletonBody rowGridClass={rowGridClass} />
       ) : (
         <div
           className="relative w-full"
@@ -269,6 +279,7 @@ export const CoinListTable = memo(function CoinListTable(
                   symbol={coin.symbol}
                   name={coin.name}
                   nameColumnMode={nameColumnMode}
+                  listLayout={listLayout}
                   isFavorite={coin.isFavorite}
                   korp={coin.korp}
                   domestic={coin.domestic}
@@ -284,6 +295,7 @@ export const CoinListTable = memo(function CoinListTable(
           })}
         </div>
       )}
+      </div>
     </div>
   );
 });

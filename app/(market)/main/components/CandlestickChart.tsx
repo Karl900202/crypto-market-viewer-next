@@ -32,8 +32,10 @@ import {
   timeframeUses15mInsteadOf10m,
 } from "@/lib/chart-timeframe";
 import { KRW_EXCHANGE } from "@/lib/krw-exchange";
+import { useClientHydrated } from "@/contexts/client-hydration-context";
 import { MARKET_COLOR_DOWN, MARKET_COLOR_UP } from "@/lib/market-colors";
 import { useThemeStore } from "@/stores/useThemeStore";
+import type { ThemeMode } from "@/stores/useThemeStore";
 
 export type { ChartTimeframe };
 
@@ -85,9 +87,7 @@ async function fetchKlinesApiWithRetry(url: string): Promise<Response> {
     if (!retryable || attempt === KLINES_FETCH_MAX_ATTEMPTS - 1) {
       return res;
     }
-    await new Promise((r) =>
-      setTimeout(r, Math.min(2000, 350 * 2 ** attempt)),
-    );
+    await new Promise((r) => setTimeout(r, Math.min(2000, 350 * 2 ** attempt)));
   }
   return last!;
 }
@@ -99,23 +99,13 @@ const VOL_DOWN = MARKET_COLOR_DOWN;
 /**
  * 캔들/거래량 세로 비율 — lightweight-charts `scaleMargins`와 오버레이(선·라벨)를 동일 값으로 맞춤.
  * 히스토그램은 자동 스케일로 **패널 높이를 꽉 채우므로** 최대 막대 상단이 패널 상단에 붙음.
- * 구분선은 빈 띠 **중앙**이므로, 거래량 패널을 충분히 **아래로** 내려 최대 막대 꼭대기가
- * 구분선보다 **분명히 아래**에 오게 함.
  */
 const CHART_CANDLE_MARGIN_BOTTOM = 0.3;
 /** 거래량 축 상단 여백(전체 차트 높이 대비) — 값이 클수록 거래량 영역이 아래로 붙고 막대가 짧아짐 */
 const CHART_VOLUME_MARGIN_TOP = 0.86;
 
-function candlePaneBottomPct(): number {
-  return (1 - CHART_CANDLE_MARGIN_BOTTOM) * 100;
-}
-
 function volumePaneTopPct(): number {
   return CHART_VOLUME_MARGIN_TOP * 100;
-}
-
-function volumeDividerLinePct(): number {
-  return (candlePaneBottomPct() + volumePaneTopPct()) / 2;
 }
 
 function applyPriceScaleMargins(chart: IChartApi, theme: "light" | "dark") {
@@ -292,9 +282,7 @@ function legendValueStyle(dir: OpenDir): React.CSSProperties | undefined {
 }
 
 function legendValueClass(dir: OpenDir): string {
-  return dir === "flat"
-    ? "text-gray-900 dark:text-white"
-    : "";
+  return dir === "flat" ? "text-gray-900 dark:text-white" : "";
 }
 
 /** 시가 대비 등락율 — 고/저/종 행 괄호 표기용 */
@@ -359,7 +347,35 @@ function timeToUnixSeconds(t: Time): number | null {
   return null;
 }
 
-/** setData 후에도 사용자가 맞춘 가로 확대/축소(시간 범위) 유지 (종목 변경·첫 로드 시에만 fit) */
+/** 최초 로드·줌 리셋 시 화면에 보이는 봉 개수(오른쪽 최신 구간) */
+const INITIAL_VISIBLE_CANDLE_COUNT = 30;
+
+/** 최신 쪽 기준으로 논리 인덱스 `count`개 봉만 보이게 함. 데이터가 더 적으면 전체 표시 */
+function fitLastVisibleCandles(
+  chart: IChartApi,
+  data: CandlestickData[],
+  count: number,
+) {
+  const apply = () => {
+    const ts = chart.timeScale();
+    const n = data.length;
+    if (n === 0) return;
+    if (n <= count) {
+      ts.fitContent();
+      return;
+    }
+    const maxIdx = n - 1;
+    const fromIdx = maxIdx - (count - 1);
+    ts.setVisibleLogicalRange({ from: fromIdx, to: maxIdx });
+  };
+  apply();
+  /** setData 직후 타임스케일이 아직 잡히지 않아 범위가 풀리는 경우 대비 — 레이아웃 이후 재적용 */
+  requestAnimationFrame(() => {
+    requestAnimationFrame(apply);
+  });
+}
+
+/** setData 후에도 사용자가 맞춘 가로 확대/축소(시간 범위) 유지 (종목 변경·첫 로드 시에는 최근 N봉만) */
 function restoreOrFitVisibleRange(
   chart: IChartApi,
   data: CandlestickData[],
@@ -374,14 +390,14 @@ function restoreOrFitVisibleRange(
   const tMax = data[data.length - 1].time as number;
 
   if (resetZoom || !saved) {
-    ts.fitContent();
+    fitLastVisibleCandles(chart, data, INITIAL_VISIBLE_CANDLE_COUNT);
     return;
   }
 
   const fromSec = timeToUnixSeconds(saved.from);
   const toSec = timeToUnixSeconds(saved.to);
   if (fromSec === null || toSec === null || fromSec >= toSec) {
-    ts.fitContent();
+    fitLastVisibleCandles(chart, data, INITIAL_VISIBLE_CANDLE_COUNT);
     return;
   }
 
@@ -393,7 +409,7 @@ function restoreOrFitVisibleRange(
       to: to as UTCTimestamp,
     });
   } else {
-    ts.fitContent();
+    fitLastVisibleCandles(chart, data, INITIAL_VISIBLE_CANDLE_COUNT);
   }
 }
 
@@ -414,7 +430,13 @@ function restoreVisibleLogicalPreserveBarCount(
   ) {
     return false;
   }
-  const span = Math.max(0.5, saved.to - saved.from);
+  const rawSpan = Math.max(0.5, saved.to - saved.from);
+  /** fitContent 직후 저장된 구간이 매우 넓으면 전체 봉이 복원됨 → 최근 N봉만 보이게 통일 */
+  if (rawSpan > INITIAL_VISIBLE_CANDLE_COUNT) {
+    fitLastVisibleCandles(chart, data, INITIAL_VISIBLE_CANDLE_COUNT);
+    return true;
+  }
+  const span = rawSpan;
   const maxIdx = Math.max(0, data.length - 1);
 
   let newFrom: number;
@@ -448,14 +470,20 @@ export type CandlestickChartProps = {
   /** 기준 거래소 — USDT일 때 국내 KRW 캔들 소스 */
   selectedExchange: string;
   t: (key: string, params?: Record<string, string | number>) => string;
+  /** 모바일 전체 화면: 최소 높이·여백을 줄여 뷰포트 안에 맞춤(바깥 페이지 스크롤 방지) */
+  fitViewport?: boolean;
 };
 
 export function CandlestickChart({
   symbol,
   selectedExchange,
   t,
+  fitViewport = false,
 }: CandlestickChartProps) {
-  const theme = useThemeStore((s) => s.theme);
+  const clientHydrated = useClientHydrated();
+  const themeFromStore = useThemeStore((s) => s.theme);
+  /** SSR·첫 페인트는 스토어 초기값(dark)과 동일 — persist 직후 깜빡임·하이드레이션 불일치 방지 */
+  const theme: ThemeMode = clientHydrated ? themeFromStore : "dark";
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -476,6 +504,11 @@ export function CandlestickChart({
   const [error, setError] = useState<string | null>(null);
   const [legend, setLegend] = useState<LegendState | null>(null);
   const [wsLive, setWsLive] = useState(false);
+
+  const fitViewportRef = useRef(fitViewport);
+  fitViewportRef.current = fitViewport;
+  /** 모바일: 차트 영역을 한 번이라도 누르기 전엔 캔들(크로스헤어) 범례를 띄우지 않음 */
+  const chartPointerInteractionRef = useRef(false);
 
   const binanceSymbol = useMemo(
     () => baseToBinanceUsdtSymbol(symbol),
@@ -516,6 +549,22 @@ export function CandlestickChart({
   );
 
   const rangeKey = useMemo(() => timeframeToRangeKey(timeframe), [timeframe]);
+
+  useLayoutEffect(() => {
+    if (!fitViewport) return;
+    chartPointerInteractionRef.current = false;
+  }, [fitViewport, symbol]);
+
+  useLayoutEffect(() => {
+    if (!fitViewport) return;
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const ae = document.activeElement;
+        if (ae instanceof HTMLElement) ae.blur();
+      });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [fitViewport, symbol]);
 
   const applyTheme = useCallback(() => {
     const chart = chartRef.current;
@@ -570,14 +619,16 @@ export function CandlestickChart({
     const onVisibleTimeRangeBridge = () => {
       visibleRangeListenerRef.current();
     };
-    chart
-      .timeScale()
-      .subscribeVisibleTimeRangeChange(onVisibleTimeRangeBridge);
+    chart.timeScale().subscribeVisibleTimeRangeChange(onVisibleTimeRangeBridge);
     chart
       .timeScale()
       .subscribeVisibleLogicalRangeChange(onVisibleTimeRangeBridge);
 
     const onCrosshairMove = (param: MouseEventParams) => {
+      if (fitViewportRef.current && !chartPointerInteractionRef.current) {
+        setLegend(null);
+        return;
+      }
       const s = seriesRef.current;
       if (!s || param.time === undefined || param.point === undefined) {
         setLegend(null);
@@ -780,11 +831,7 @@ export function CandlestickChart({
       if (sameSymbolKeepZoom) {
         savedVisibleBefore = chartBefore.timeScale().getVisibleRange();
         const lr = chartBefore.timeScale().getVisibleLogicalRange();
-        if (
-          lr !== null &&
-          Number.isFinite(lr.from) &&
-          Number.isFinite(lr.to)
-        ) {
+        if (lr !== null && Number.isFinite(lr.from) && Number.isFinite(lr.to)) {
           savedLogicalBefore = { from: lr.from, to: lr.to };
         }
       }
@@ -852,7 +899,11 @@ export function CandlestickChart({
         const logicalOk =
           sameSymbol &&
           savedLogicalBefore !== null &&
-          restoreVisibleLogicalPreserveBarCount(chart, data, savedLogicalBefore);
+          restoreVisibleLogicalPreserveBarCount(
+            chart,
+            data,
+            savedLogicalBefore,
+          );
         if (!logicalOk) {
           restoreOrFitVisibleRange(
             chart,
@@ -1225,11 +1276,7 @@ export function CandlestickChart({
       if (sameSymbolKeepZoom) {
         savedVisibleBefore = chartBefore.timeScale().getVisibleRange();
         const lr = chartBefore.timeScale().getVisibleLogicalRange();
-        if (
-          lr !== null &&
-          Number.isFinite(lr.from) &&
-          Number.isFinite(lr.to)
-        ) {
+        if (lr !== null && Number.isFinite(lr.from) && Number.isFinite(lr.to)) {
           savedLogicalBefore = { from: lr.from, to: lr.to };
         }
       }
@@ -1306,7 +1353,11 @@ export function CandlestickChart({
         const logicalOk =
           sameSymbol &&
           savedLogicalBefore !== null &&
-          restoreVisibleLogicalPreserveBarCount(chart, data, savedLogicalBefore);
+          restoreVisibleLogicalPreserveBarCount(
+            chart,
+            data,
+            savedLogicalBefore,
+          );
         if (!logicalOk) {
           restoreOrFitVisibleRange(
             chart,
@@ -1349,7 +1400,7 @@ export function CandlestickChart({
 
   const legendTimeStr = useMemo(() => {
     if (!legend) return "";
-    return new Date(legend.timeSec * 1000).toLocaleString(undefined, {
+    return new Date(legend.timeSec * 1000).toLocaleString("en-US", {
       year: "numeric",
       month: "short",
       day: "numeric",
@@ -1378,8 +1429,16 @@ export function CandlestickChart({
     : "__higher__";
 
   return (
-    <div className="flex h-full min-h-[280px] flex-col gap-2">
-      <div className="flex shrink-0 flex-col gap-2 px-0.5">
+    <div
+      className={`flex h-full flex-col pt-1 ${
+        fitViewport ? "min-h-0 gap-1" : "min-h-[280px] gap-2"
+      }`}
+    >
+      <div
+        className={`flex shrink-0 flex-col px-0.5 ${
+          fitViewport ? "gap-1" : "gap-2"
+        }`}
+      >
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <div className="flex flex-wrap items-center gap-2">
             <select
@@ -1391,10 +1450,10 @@ export function CandlestickChart({
                   setTimeframe(v as ChartTimeframe);
                 }
               }}
-              className={`rounded border px-2 py-0.5 text-[13px] font-medium shadow-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white ${
+              className={`rounded px-2 py-0.5 text-[13px] font-medium shadow-sm ${
                 isMinuteTimeframe(timeframe)
-                  ? "border-gray-200 bg-gray-200 text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
-                  : "border-gray-200 bg-white text-gray-500 dark:text-gray-400"
+                  ? "bg-muted text-foreground"
+                  : "bg-background text-gray-500 dark:text-gray-400"
               }`}
             >
               <option value="__higher__" hidden>
@@ -1420,8 +1479,8 @@ export function CandlestickChart({
                   onClick={() => setTimeframe(tf)}
                   className={`rounded px-2 py-0.5 text-[13px] font-medium transition-colors ${
                     timeframe === tf
-                      ? "bg-gray-200 text-gray-900 dark:bg-gray-700 dark:text-white"
-                      : "text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800"
+                      ? "bg-muted text-foreground"
+                      : "text-gray-500 hover:bg-muted dark:text-gray-400"
                   }`}
                 >
                   {t(TIMEFRAME_LABEL_KEY[tf])}
@@ -1463,9 +1522,9 @@ export function CandlestickChart({
         </div>
       </div>
 
-      <div className="relative min-h-0 flex-1 w-full rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900/50">
+      <div className="relative min-h-0 flex-1 w-full rounded-lg bg-background">
         {legend && (
-          <div className="pointer-events-none absolute left-2 top-2 z-[2] max-w-[min(100%-1rem,20rem)] rounded-md border border-gray-200/90 bg-white/95 px-2.5 py-2 text-[13px] shadow-sm backdrop-blur-sm dark:border-gray-600 dark:bg-gray-900/95">
+          <div className="pointer-events-none absolute left-2 top-2 z-[2] max-w-[min(100%-1rem,20rem)] rounded-md bg-background/95 px-2.5 py-2 text-[13px] shadow-sm backdrop-blur-sm">
             <div className="mb-1.5 font-medium text-gray-600 dark:text-gray-300">
               {legendTimeStr}
             </div>
@@ -1531,7 +1590,7 @@ export function CandlestickChart({
 
         {loading && (
           <div
-            className="absolute inset-0 z-[3] flex items-center justify-center rounded-lg bg-white/88 backdrop-blur-[1px] dark:bg-gray-900/88"
+            className="absolute inset-0 z-[3] flex items-center justify-center rounded-lg bg-background/88 backdrop-blur-[1px] dark:bg-background/88"
             role="status"
             aria-label={t("chart.loading")}
           >
@@ -1542,19 +1601,22 @@ export function CandlestickChart({
           </div>
         )}
         {error && (
-          <div className="absolute inset-0 z-[3] flex items-center justify-center rounded-lg bg-white/90 px-4 text-center text-sm text-red-600 dark:bg-gray-900/90 dark:text-red-400">
+          <div className="absolute inset-0 z-[3] flex items-center justify-center rounded-lg bg-background/90 px-4 text-center text-sm text-red-600 dark:bg-background/90 dark:text-red-400">
             {error}
           </div>
         )}
-        <div ref={containerRef} className="h-full min-h-[240px] w-full" />
-        <div className="pointer-events-none absolute inset-0 z-[1] min-h-[240px]">
-          <div
-            className="absolute left-0 right-0 border-t border-gray-300 dark:border-gray-600"
-            aria-hidden
-            style={{
-              top: `${volumeDividerLinePct()}%`,
-            }}
-          />
+        <div
+          ref={containerRef}
+          className={`h-full w-full ${fitViewport ? "min-h-0" : "min-h-[240px]"}`}
+          onPointerDownCapture={() => {
+            chartPointerInteractionRef.current = true;
+          }}
+        />
+        <div
+          className={`pointer-events-none absolute inset-0 z-[1] ${
+            fitViewport ? "min-h-0" : "min-h-[240px]"
+          }`}
+        >
           <div
             className="absolute left-2 text-[10px] font-semibold text-gray-500 dark:text-gray-400"
             style={{ top: `calc(${volumePaneTopPct()}% + 0.25rem)` }}

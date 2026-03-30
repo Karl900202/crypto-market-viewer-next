@@ -43,6 +43,7 @@ export const useMarketSelectionStore = create<MarketSelectionState>()(
         selectedSymbol: state.selectedSymbol,
         selectedSymbolByExchange: state.selectedSymbolByExchange,
       }),
+      skipHydration: true,
     },
   ),
 );

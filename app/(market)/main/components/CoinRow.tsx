@@ -13,6 +13,20 @@ import { useMarketSelectionStore } from "@/stores/useMarketSelectionStore";
 export const COIN_LIST_ROW_GRID_CLASS =
   "grid grid-cols-[minmax(0,1fr)_76px_56px_72px_70px] gap-x-1.5 gap-y-0 items-stretch";
 
+/** 목록·차트(stacked) 모드: 이름 열 최소 폭 확보 + 숫자 열 압축 — 좁은 폭에서 가로 스크롤과 함께 사용 */
+export const COIN_LIST_ROW_GRID_CLASS_STACKED =
+  "grid grid-cols-[minmax(108px,1fr)_64px_48px_52px_52px] gap-x-1 gap-y-0 items-stretch";
+
+export type CoinListLayoutVariant = "split" | "stacked";
+
+export function coinListRowGridClass(
+  layout: CoinListLayoutVariant,
+): string {
+  return layout === "stacked"
+    ? COIN_LIST_ROW_GRID_CLASS_STACKED
+    : COIN_LIST_ROW_GRID_CLASS;
+}
+
 /** 각 컬럼 셀: 행 높이에 맞춰 세로 가운데 정렬 (스켈레톤 행과 공유) */
 export const COIN_LIST_ROW_CELL_CLASS =
   "flex h-full min-h-0 flex-col justify-center self-stretch";
@@ -39,6 +53,8 @@ export type CoinRowProps = {
   symbol: string;
   name: string;
   nameColumnMode: NameColumnMode;
+  /** split: 고정 폭 패널 · stacked: 목록+차트 전환 모드(그리드·최소폭 다름) */
+  listLayout?: CoinListLayoutVariant;
   isFavorite: boolean;
   korp?: number;
   domestic?: DomesticTickerVM;
@@ -56,6 +72,7 @@ export const CoinRow = memo(
       symbol,
       name,
       nameColumnMode,
+      listLayout = "split",
       isFavorite,
       korp,
       domestic,
@@ -97,19 +114,20 @@ export const CoinRow = memo(
     const pairLabel = `${symbol}/KRW`;
     const primaryName =
       nameColumnMode === "korean" ? name : getCoinEnglishDisplayName(symbol);
+    const rowGridClass = coinListRowGridClass(listLayout);
 
     return (
       <button
         type="button"
         onClick={handleClick}
-        className={`relative w-full overflow-hidden border-b border-[#eef1f5] px-3 py-2 text-left font-normal hover:bg-[#f7f9fc] focus:outline-none dark:border-gray-800 dark:hover:bg-gray-800/80 ${
+        className={`relative w-full overflow-hidden px-3 py-2 text-left font-normal hover:bg-muted focus:outline-none ${
           isSelected
             ? "before:pointer-events-none before:absolute before:inset-y-0 before:left-0 before:z-[1] before:w-[3px] before:bg-orange-500 before:content-[''] dark:before:bg-orange-400 bg-[#e9f0ff] hover:bg-[#e0ebff] dark:bg-blue-950/35 dark:hover:bg-blue-950/45"
-            : "bg-white dark:bg-gray-900"
+            : "bg-background"
         }`}
       >
-        <div className={COIN_LIST_ROW_GRID_CLASS}>
-          <div className="flex items-center gap-1.5">
+        <div className={rowGridClass}>
+          <div className="flex min-w-0 items-center gap-1.5">
               <span
                 role="button"
                 tabIndex={0}
@@ -132,7 +150,7 @@ export const CoinRow = memo(
           <div className={`min-w-0 text-left ${COIN_LIST_ROW_CELL_CLASS}`}>
             <div className="flex min-w-0 items-center gap-1.5">
               <div
-                className="truncate text-[12px] font-normal leading-snug text-gray-900 dark:text-white"
+                className="min-w-0 truncate text-[12px] font-normal leading-snug text-gray-900 dark:text-white"
                 title={primaryName}
               >
                 {primaryName}
@@ -244,6 +262,7 @@ export const CoinRow = memo(
     a.symbol === b.symbol &&
     a.name === b.name &&
     a.nameColumnMode === b.nameColumnMode &&
+    (a.listLayout ?? "split") === (b.listLayout ?? "split") &&
     a.isFavorite === b.isFavorite &&
     a.korp === b.korp &&
     domesticTickerVmSnapshot(a.domestic) ===

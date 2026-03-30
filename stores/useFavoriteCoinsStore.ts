@@ -27,6 +27,7 @@ export const useFavoriteCoinsStore = create<FavoriteCoinsState>()(
       name: FAVORITE_COINS_STORAGE_KEY,
       version: 1,
       partialize: (state) => ({ favorites: state.favorites }),
+      skipHydration: true,
     },
   ),
 );

@@ -21,7 +21,8 @@ export const useI18nStore = create<I18nState>()(
       name: LOCALE_STORAGE_KEY,
       version: 1,
       partialize: (state) => ({ locale: state.locale }),
-    }
-  )
+      skipHydration: true,
+    },
+  ),
 );
 

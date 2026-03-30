@@ -12,8 +12,8 @@ export default function Loading() {
 
   return (
     <div className="flex h-full min-h-0 w-full gap-4">
-      <aside className="flex w-[462px] shrink-0 flex-col overflow-hidden border-r border-[#e5e8eb] bg-white dark:border-gray-800 dark:bg-gray-900 min-h-0 min-w-0">
-        <div className="shrink-0 border-b border-[#e5e8eb] px-3 py-3 dark:border-gray-800">
+      <aside className="flex w-[462px] shrink-0 flex-col overflow-hidden bg-background min-h-0 min-w-0">
+        <div className="shrink-0 px-3 py-3">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1 space-y-2">
               <div className="flex flex-wrap items-center gap-2">
@@ -35,7 +35,7 @@ export default function Loading() {
         </div>
       </aside>
 
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
         <div className="flex shrink-0 items-center justify-between gap-4 px-5 py-4">
           <div className="min-w-0 space-y-2">
             <div className="h-5 max-w-[200px] rounded bg-gray-200 dark:bg-gray-700 animate-skeleton" />

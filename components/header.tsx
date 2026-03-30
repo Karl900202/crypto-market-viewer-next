@@ -2,22 +2,29 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { useClientHydrated } from "@/contexts/client-hydration-context";
 import { useThemeStore } from "@/stores/useThemeStore";
 import { useI18nStore } from "@/stores/useI18nStore";
 import { useT } from "@/hooks/useT";
+import type { Locale } from "@/i18n/translations";
+
+const SSR_LOCALE: Locale = "ko";
 
 export default function Header() {
   const t = useT();
+  const clientHydrated = useClientHydrated();
   const locale = useI18nStore((s) => s.locale);
   const setLocale = useI18nStore((s) => s.setLocale);
   const theme = useThemeStore((s) => s.theme);
   const toggleTheme = useThemeStore((s) => s.toggleTheme);
-  const isDark = theme === "dark";
+  const displayLocale = clientHydrated ? locale : SSR_LOCALE;
+  const displayTheme = clientHydrated ? theme : "dark";
+  const isDark = displayTheme === "dark";
 
   const [langHover, setLangHover] = useState(false);
 
   return (
-    <header className="w-full shrink-0 border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
+    <header className="w-full shrink-0 border-b border-border bg-background">
       {/* 배경은 전체 너비, 안쪽 콘텐츠는 본문과 같은 max-width로 정렬 */}
       <div className="mx-auto flex h-16 w-full max-w-[1400px] items-center justify-between px-4">
         {/* Left: logo + nav */}
@@ -50,7 +57,7 @@ export default function Header() {
                 />
               </svg>
             </span>
-            <span className="text-sm font-medium text-gray-900 dark:text-white">
+            <span className="text-sm font-medium text-foreground">
               {locale === "ko" ? t("language.ko") : t("language.en")}
             </span>
             {/* pt-1: 트리거와 메뉴 사이 호버 끊김 방지 */}
@@ -61,14 +68,14 @@ export default function Header() {
               <ul
                 role="listbox"
                 aria-label="Language"
-                className={`min-w-[5.5rem] rounded-md border border-gray-200 bg-white py-1 shadow-md transition-opacity duration-150 dark:border-gray-600 dark:bg-gray-800 ${langHover ? "visible opacity-100" : "invisible opacity-0"}`}
+                className={`min-w-[5.5rem] rounded-md border border-border bg-background py-1 shadow-md transition-opacity duration-150 ${langHover ? "visible opacity-100" : "invisible opacity-0"}`}
               >
                 <li role="presentation">
                   <button
                     type="button"
                     role="option"
-                    aria-selected={locale === "ko"}
-                    className="w-full cursor-pointer px-3 py-2 text-center text-sm text-gray-900 hover:bg-gray-100 dark:text-gray-100 dark:hover:bg-gray-700"
+                    aria-selected={displayLocale === "ko"}
+                    className="w-full cursor-pointer px-3 py-2 text-center text-sm text-foreground hover:bg-muted"
                     onClick={() => setLocale("ko")}
                   >
                     {t("language.ko")}
@@ -78,8 +85,8 @@ export default function Header() {
                   <button
                     type="button"
                     role="option"
-                    aria-selected={locale === "en"}
-                    className="w-full cursor-pointer px-3 py-2 text-center text-sm text-gray-900 hover:bg-gray-100 dark:text-gray-100 dark:hover:bg-gray-700"
+                    aria-selected={displayLocale === "en"}
+                    className="w-full cursor-pointer px-3 py-2 text-center text-sm text-foreground hover:bg-muted"
                     onClick={() => setLocale("en")}
                   >
                     {t("language.en")}
@@ -102,7 +109,7 @@ export default function Header() {
           {/* Login button */}
           <button
             type="button"
-            className="text-gray-900 transition-colors hover:text-yellow-400 dark:text-white"
+            className="text-foreground transition-colors hover:text-yellow-400"
           >
             {t("auth.login")}
           </button>

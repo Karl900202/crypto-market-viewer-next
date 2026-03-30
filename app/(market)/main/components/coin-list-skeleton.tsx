@@ -19,13 +19,17 @@ const SkeletonBar = memo(function SkeletonBar({
 });
 
 /** CoinRow 첫 칸: 별 16px + gap-1.5 + 두 줄 — 그리드 열 정렬과 동일 */
-export const CoinListSkeletonRow = memo(function CoinListSkeletonRow() {
+export const CoinListSkeletonRow = memo(function CoinListSkeletonRow({
+  rowGridClass = COIN_LIST_ROW_GRID_CLASS,
+}: {
+  rowGridClass?: string;
+}) {
   return (
     <div
-      className="flex w-full border-b border-[#eef1f5] bg-white px-3 py-2 dark:border-gray-800 dark:bg-gray-900"
+      className="flex w-full bg-background px-3 py-2"
       aria-hidden
     >
-      <div className={`${COIN_LIST_ROW_GRID_CLASS} w-full items-center`}>
+      <div className={`${rowGridClass} w-full items-center`}>
         <div className="flex min-w-0 items-center gap-1.5">
           <div
             className="h-4 w-4 shrink-0 rounded bg-gray-200 dark:bg-gray-700 animate-skeleton"
@@ -49,10 +53,14 @@ export const CoinListSkeletonRow = memo(function CoinListSkeletonRow() {
 
 /** 스티키 컬럼 헤더와 동일 그리드·배경 (실제 테이블 헤더 자리) */
 export const CoinListSkeletonTableHeader = memo(
-  function CoinListSkeletonTableHeader() {
+  function CoinListSkeletonTableHeader({
+    rowGridClass = COIN_LIST_ROW_GRID_CLASS,
+  }: {
+    rowGridClass?: string;
+  }) {
     return (
       <div
-        className={`sticky top-0 z-[1] w-full min-w-0 font-normal ${COIN_LIST_ROW_GRID_CLASS} border-b border-[#e5e8eb] bg-[#f9fafb] px-3 py-2 dark:border-gray-800 dark:bg-gray-800/90`}
+        className={`sticky top-0 z-[1] w-full min-w-0 font-normal ${rowGridClass} bg-muted px-3 py-2`}
         aria-hidden
       >
         <SkeletonBar className="h-3 w-14" />
@@ -67,7 +75,11 @@ export const CoinListSkeletonTableHeader = memo(
   },
 );
 
-export const CoinListSkeletonBody = memo(function CoinListSkeletonBody() {
+export const CoinListSkeletonBody = memo(function CoinListSkeletonBody({
+  rowGridClass = COIN_LIST_ROW_GRID_CLASS,
+}: {
+  rowGridClass?: string;
+}) {
   const fillRef = useRef<HTMLDivElement>(null);
   const [rowCount, setRowCount] = useState(20);
 
@@ -96,7 +108,7 @@ export const CoinListSkeletonBody = memo(function CoinListSkeletonBody() {
       className="flex min-h-0 w-full min-w-0 flex-1 flex-col"
     >
       {Array.from({ length: rowCount }).map((_, i) => (
-        <CoinListSkeletonRow key={i} />
+        <CoinListSkeletonRow key={i} rowGridClass={rowGridClass} />
       ))}
     </div>
   );

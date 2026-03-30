@@ -8,7 +8,7 @@ import {
 export function MarketListSkeletonRow({ keyProp }: { keyProp: number }) {
   void keyProp;
   return (
-    <div className="border-b border-[#eef1f5] bg-white px-3 py-2 dark:border-gray-800">
+    <div className="bg-background px-3 py-2">
       <div className={COIN_LIST_ROW_GRID_CLASS}>
         <div className={`min-w-0 ${COIN_LIST_ROW_CELL_CLASS}`}>
           <div className="h-3 w-28 bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
