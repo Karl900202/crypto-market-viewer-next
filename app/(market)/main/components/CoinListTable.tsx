@@ -125,18 +125,18 @@ const NameColumnHeader = memo(function NameColumnHeader({
       : t("table.nameHeaderEnglish");
 
   return (
-    <div className="group inline-flex w-full min-w-0 items-center justify-start select-none whitespace-nowrap">
+    <div className="group inline-flex w-full min-w-0 items-start justify-start select-none">
       <button
         type="button"
         onClick={onToggleNameColumnMode}
-        className="inline-flex min-w-0 max-w-full items-center gap-0.5 rounded px-0.5 py-0.5 -mx-0.5 hover:bg-gray-200/80 dark:hover:bg-gray-700/80"
+        className="inline-flex min-w-0 max-w-full items-start gap-1 rounded px-0.5 py-0.5 -mx-0.5 hover:bg-gray-200/80 dark:hover:bg-gray-700/80"
         title={
           nameColumnMode === "korean"
             ? t("table.nameToggleToEnglish")
             : t("table.nameToggleToKorean")
         }
       >
-        <span className="truncate text-[12px] font-normal leading-none text-[#8b94a1] dark:text-gray-400">
+        <span className="min-w-0 break-words text-left text-[12px] font-normal leading-snug text-[#8b94a1] dark:text-gray-400">
           {label}
         </span>
         <SwapIcon className="shrink-0 text-[#8b94a1] dark:text-gray-400 opacity-90" />
@@ -170,7 +170,7 @@ const HeaderButton = memo(function HeaderButton({
     <button
       type="button"
       onClick={() => onToggleSort(sortKey)}
-      className={`group inline-flex w-full items-center gap-1 ${justify} select-none whitespace-nowrap ${className ?? ""}`}
+      className={`group inline-flex w-full min-w-0 items-center gap-1.5 ${justify} select-none whitespace-nowrap ${className ?? ""}`}
     >
       <span className={labelClass}>{label}</span>
       <SortIcon active={active} dir={dir} />
@@ -214,15 +214,13 @@ export const CoinListTable = memo(function CoinListTable(
   return (
     <div
       ref={scrollParentRef}
-      className="modern-scrollbar flex h-full min-h-0 min-w-0 flex-1 touch-pan-y flex-col overflow-y-auto overflow-x-auto overscroll-y-contain [-webkit-overflow-scrolling:touch]"
+      className="modern-scrollbar flex h-full min-h-0 min-w-0 flex-1 touch-pan-y flex-col overflow-y-auto overflow-x-hidden overscroll-y-contain [-webkit-overflow-scrolling:touch]"
     >
       <div
-        className={
-          listLayout === "stacked" ? "min-w-[320px] w-max max-w-none" : "min-w-0"
-        }
+        className="w-full min-w-0 max-w-full"
       >
       <div
-        className={`sticky top-0 z-[1] w-full min-w-0 font-normal ${rowGridClass} bg-muted px-3 py-2`}
+        className={`sticky top-0 z-[1] w-full min-w-0 font-normal ${rowGridClass} bg-muted px-3 py-2.5`}
       >
         <NameColumnHeader
           nameColumnMode={nameColumnMode}
@@ -242,7 +240,6 @@ export const CoinListTable = memo(function CoinListTable(
           label={t("table.korp")}
           sort={sort}
           onToggleSort={onToggleSort}
-          className="ml-1"
         />
         <HeaderButton
           sortKey="change"

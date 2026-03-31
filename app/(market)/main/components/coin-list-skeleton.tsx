@@ -3,8 +3,8 @@
 import React, { memo, useLayoutEffect, useRef, useState } from "react";
 import { COIN_LIST_ROW_GRID_CLASS } from "./CoinRow";
 
-/** CoinRow: 별(16px)+gap + 두 줄 텍스트 + py-2 — 가상 스크롤·스켈레톤 행 수 계산 */
-export const COIN_LIST_ROW_ESTIMATE_PX = 56;
+/** CoinRow: 별+이름(줄바꿈 가능)+페어 + py-2.5 — 가상 스크롤 행 높이 추정 */
+export const COIN_LIST_ROW_ESTIMATE_PX = 64;
 
 const SkeletonBar = memo(function SkeletonBar({
   className,
@@ -26,11 +26,11 @@ export const CoinListSkeletonRow = memo(function CoinListSkeletonRow({
 }) {
   return (
     <div
-      className="flex w-full bg-background px-3 py-2"
+      className="flex w-full bg-background px-3 py-2.5"
       aria-hidden
     >
-      <div className={`${rowGridClass} w-full items-center`}>
-        <div className="flex min-w-0 items-center gap-1.5">
+      <div className={`${rowGridClass} w-full items-stretch`}>
+        <div className="flex min-w-0 items-start gap-2">
           <div
             className="h-4 w-4 shrink-0 rounded bg-gray-200 dark:bg-gray-700 animate-skeleton"
             aria-hidden
@@ -41,7 +41,7 @@ export const CoinListSkeletonRow = memo(function CoinListSkeletonRow({
           </div>
         </div>
         <SkeletonBar className="h-3 w-14 justify-self-end" />
-        <div className="ml-1 flex justify-end justify-self-end">
+        <div className="flex justify-end justify-self-end">
           <SkeletonBar className="h-3 w-10" />
         </div>
         <SkeletonBar className="h-3 w-12 justify-self-end" />
@@ -60,12 +60,12 @@ export const CoinListSkeletonTableHeader = memo(
   }) {
     return (
       <div
-        className={`sticky top-0 z-[1] w-full min-w-0 font-normal ${rowGridClass} bg-muted px-3 py-2`}
+        className={`sticky top-0 z-[1] w-full min-w-0 font-normal ${rowGridClass} bg-muted px-3 py-2.5`}
         aria-hidden
       >
         <SkeletonBar className="h-3 w-14" />
         <SkeletonBar className="h-3 w-8 justify-self-end" />
-        <div className="ml-1 flex justify-end justify-self-end">
+        <div className="flex justify-end justify-self-end">
           <SkeletonBar className="h-3 w-7" />
         </div>
         <SkeletonBar className="h-3 w-10 justify-self-end" />

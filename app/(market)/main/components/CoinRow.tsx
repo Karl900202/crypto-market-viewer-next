@@ -11,11 +11,10 @@ import { useMarketSelectionStore } from "@/stores/useMarketSelectionStore";
 
 /** 좌측 마켓 패널(~462px) 기준: 이름 열에 가로 여유 — items-stretch로 컬럼 높이 통일 */
 export const COIN_LIST_ROW_GRID_CLASS =
-  "grid grid-cols-[minmax(0,1fr)_76px_56px_72px_70px] gap-x-1.5 gap-y-0 items-stretch";
+  "grid grid-cols-[minmax(0,1fr)_84px_58px_64px_72px] gap-x-2 gap-y-0 items-stretch";
 
-/** 목록·차트(stacked) 모드: 이름 열 최소 폭 확보 + 숫자 열 압축 — 좁은 폭에서 가로 스크롤과 함께 사용 */
-export const COIN_LIST_ROW_GRID_CLASS_STACKED =
-  "grid grid-cols-[minmax(108px,1fr)_64px_48px_52px_52px] gap-x-1 gap-y-0 items-stretch";
+/** 목록·차트(stacked): split과 동일 그리드 — 가로 스크롤 없이 패널 너비에 맞춤 */
+export const COIN_LIST_ROW_GRID_CLASS_STACKED = COIN_LIST_ROW_GRID_CLASS;
 
 export type CoinListLayoutVariant = "split" | "stacked";
 
@@ -53,8 +52,6 @@ export type CoinRowProps = {
   symbol: string;
   name: string;
   nameColumnMode: NameColumnMode;
-  /** split: 고정 폭 패널 · stacked: 목록+차트 전환 모드(그리드·최소폭 다름) */
-  listLayout?: CoinListLayoutVariant;
   isFavorite: boolean;
   korp?: number;
   domestic?: DomesticTickerVM;
@@ -64,6 +61,7 @@ export type CoinRowProps = {
   onToggleFavorite: (symbol: string) => void;
   formatPrice: (price: number) => string;
   formatTradeValueInMillionsKrw: (valueKrw: number) => string;
+  listLayout?: CoinListLayoutVariant;
 };
 
 export const CoinRow = memo(
@@ -72,7 +70,6 @@ export const CoinRow = memo(
       symbol,
       name,
       nameColumnMode,
-      listLayout = "split",
       isFavorite,
       korp,
       domestic,
@@ -82,6 +79,7 @@ export const CoinRow = memo(
       onToggleFavorite,
       formatPrice,
       formatTradeValueInMillionsKrw,
+      listLayout = "split",
     } = props;
 
     const isSelected = useMarketSelectionStore(
@@ -120,14 +118,14 @@ export const CoinRow = memo(
       <button
         type="button"
         onClick={handleClick}
-        className={`relative w-full overflow-hidden px-3 py-2 text-left font-normal hover:bg-muted focus:outline-none ${
+        className={`relative w-full overflow-hidden border-b border-[#eef1f5] px-3 py-2.5 text-left font-normal hover:bg-[#f7f9fc] focus:outline-none dark:border-gray-800 dark:hover:bg-gray-800/80 ${
           isSelected
             ? "before:pointer-events-none before:absolute before:inset-y-0 before:left-0 before:z-[1] before:w-[3px] before:bg-orange-500 before:content-[''] dark:before:bg-orange-400 bg-[#e9f0ff] hover:bg-[#e0ebff] dark:bg-blue-950/35 dark:hover:bg-blue-950/45"
-            : "bg-background"
+            : "bg-white dark:bg-gray-900"
         }`}
       >
         <div className={rowGridClass}>
-          <div className="flex min-w-0 items-center gap-1.5">
+          <div className="flex min-w-0 items-start gap-2">
               <span
                 role="button"
                 tabIndex={0}
@@ -148,18 +146,12 @@ export const CoinRow = memo(
                 </svg>
               </span>
           <div className={`min-w-0 text-left ${COIN_LIST_ROW_CELL_CLASS}`}>
-            <div className="flex min-w-0 items-center gap-1.5">
-              <div
-                className="min-w-0 truncate text-[12px] font-normal leading-snug text-gray-900 dark:text-white"
-                title={primaryName}
-              >
-                {primaryName}
-              </div>
-            </div>
             <div
-              className="truncate text-[11px] font-normal leading-tight text-[#8b94a1] dark:text-gray-500"
-              title={pairLabel}
+              className="min-w-0 break-words text-[12px] font-normal leading-snug text-gray-900 dark:text-white"
             >
+              {primaryName}
+            </div>
+            <div className="mt-0.5 whitespace-nowrap text-[11px] font-normal leading-tight text-[#8b94a1] dark:text-gray-500">
               {pairLabel}
             </div>
           </div>
@@ -171,7 +163,7 @@ export const CoinRow = memo(
             }`}
           >
             <div
-              className={`text-[12px] font-normal tabular-nums ${upDownTextClass(domesticChangePercent)} ${
+              className={`text-[12px] font-normal tabular-nums whitespace-nowrap ${upDownTextClass(domesticChangePercent)} ${
                 flash === "up"
                   ? "animate-flash-up"
                   : flash === "down"
@@ -187,12 +179,12 @@ export const CoinRow = memo(
           </div>
 
           <div
-            className={`ml-1 text-right tabular-nums ${COIN_LIST_ROW_CELL_CLASS}`}
+            className={`text-right tabular-nums ${COIN_LIST_ROW_CELL_CLASS}`}
           >
             {korp !== undefined ? (
               <div>
                 <div
-                  className={`text-[12px] font-normal tabular-nums ${korpTextClass(korp)}`}
+                  className={`text-[12px] font-normal tabular-nums whitespace-nowrap ${korpTextClass(korp)}`}
                 >
                   {korp >= 0 ? "+" : ""}
                   {korp.toFixed(2)}%
@@ -262,7 +254,6 @@ export const CoinRow = memo(
     a.symbol === b.symbol &&
     a.name === b.name &&
     a.nameColumnMode === b.nameColumnMode &&
-    (a.listLayout ?? "split") === (b.listLayout ?? "split") &&
     a.isFavorite === b.isFavorite &&
     a.korp === b.korp &&
     domesticTickerVmSnapshot(a.domestic) ===
@@ -272,5 +263,6 @@ export const CoinRow = memo(
     a.onSelect === b.onSelect &&
     a.onToggleFavorite === b.onToggleFavorite &&
     a.formatPrice === b.formatPrice &&
-    a.formatTradeValueInMillionsKrw === b.formatTradeValueInMillionsKrw,
+    a.formatTradeValueInMillionsKrw === b.formatTradeValueInMillionsKrw &&
+    (a.listLayout ?? "split") === (b.listLayout ?? "split"),
 );
