@@ -5,36 +5,23 @@ import {
   domesticTickerVmSnapshot,
   type DomesticTickerVM,
 } from "@/lib/domestic-ticker-vm";
+import {
+  COIN_LIST_ROW_CELL_CLASS,
+  coinListRowGridClass,
+  type CoinListLayoutVariant,
+} from "@/lib/coin-list-layout";
 import { getCoinEnglishDisplayName } from "@/lib/coin-english-display-name";
 import type { NameColumnMode } from "@/lib/name-column-mode";
 import { useMarketSelectionStore } from "@/stores/useMarketSelectionStore";
-
-/** 좌측 마켓 패널(~462px) 기준: 이름 열에 가로 여유 — items-stretch로 컬럼 높이 통일 */
-export const COIN_LIST_ROW_GRID_CLASS =
-  "grid grid-cols-[minmax(0,1fr)_84px_58px_64px_72px] gap-x-2 gap-y-0 items-stretch";
-
-/** 목록·차트(stacked): split과 동일 그리드 — 가로 스크롤 없이 패널 너비에 맞춤 */
-export const COIN_LIST_ROW_GRID_CLASS_STACKED = COIN_LIST_ROW_GRID_CLASS;
-
-export type CoinListLayoutVariant = "split" | "stacked";
-
-export function coinListRowGridClass(
-  layout: CoinListLayoutVariant,
-): string {
-  return layout === "stacked"
-    ? COIN_LIST_ROW_GRID_CLASS_STACKED
-    : COIN_LIST_ROW_GRID_CLASS;
-}
-
-/** 각 컬럼 셀: 행 높이에 맞춰 세로 가운데 정렬 (스켈레톤 행과 공유) */
-export const COIN_LIST_ROW_CELL_CLASS =
-  "flex h-full min-h-0 flex-col justify-center self-stretch";
 
 /** 상승 / 하락 브랜드 색 (라이트·다크 공통) */
 const COLOR_UP = "text-[#dd3c44]";
 const COLOR_DOWN = "text-[#1375ec]";
 
-/** 상승 빨강 · 하락 파랑 (전일대비·KORP 등 공통) */
+const cnMuted = "text-[#8b94a1] dark:text-gray-500";
+const cnNum12 = "text-[12px] font-normal tabular-nums whitespace-nowrap";
+const cnNum11 = "text-[11px] font-normal whitespace-nowrap tabular-nums";
+
 const upDownTextClass = (v: number | undefined) => {
   if (v === undefined || !Number.isFinite(v))
     return "text-gray-900 dark:text-white";
@@ -43,8 +30,17 @@ const upDownTextClass = (v: number | undefined) => {
   return "text-gray-900 dark:text-white";
 };
 
-/** KORP: +는 빨강, -는 파랑 (0은 상승측 빨강) */
 const korpTextClass = (korp: number) => (korp >= 0 ? COLOR_UP : COLOR_DOWN);
+
+function formatSignedKrwDiff(
+  dom: number | undefined,
+  glob: number | undefined,
+  formatPrice: (n: number) => string,
+): string | null {
+  if (dom === undefined || glob === undefined) return null;
+  const diff = dom - glob;
+  return `${diff >= 0 ? "+" : "-"}${formatPrice(Math.abs(diff))}`;
+}
 
 export type PriceFlashDir = "up" | "down" | null;
 
@@ -113,6 +109,7 @@ export const CoinRow = memo(
     const primaryName =
       nameColumnMode === "korean" ? name : getCoinEnglishDisplayName(symbol);
     const rowGridClass = coinListRowGridClass(listLayout);
+    const krwDiffLine = formatSignedKrwDiff(domPrice, globalKrw, formatPrice);
 
     return (
       <button
@@ -126,44 +123,44 @@ export const CoinRow = memo(
       >
         <div className={rowGridClass}>
           <div className="flex min-w-0 items-start gap-2">
-              <span
-                role="button"
-                tabIndex={0}
-                aria-label={`${symbol} favorite`}
-                onClick={handleToggleFavorite}
-                onKeyDown={handleToggleFavoriteKeyDown}
-                className={`inline-flex shrink-0 items-center justify-center cursor-pointer ${
-                  isFavorite
-                    ? "text-[#f5c542] hover:text-[#eab308]"
-                    : "text-gray-300 hover:text-gray-400 dark:text-gray-500 dark:hover:text-gray-400"
-                }`}
-              >
-                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-                  <path
-                    fill="currentColor"
-                    d="M12 2.5l2.93 5.94 6.56.95-4.74 4.62 1.12 6.53L12 17.47 6.13 20.54l1.12-6.53-4.74-4.62 6.56-.95L12 2.5z"
-                  />
-                </svg>
-              </span>
-          <div className={`min-w-0 text-left ${COIN_LIST_ROW_CELL_CLASS}`}>
-            <div
-              className="min-w-0 break-words text-[12px] font-normal leading-snug text-gray-900 dark:text-white"
+            <span
+              role="button"
+              tabIndex={0}
+              aria-label={`${symbol} favorite`}
+              onClick={handleToggleFavorite}
+              onKeyDown={handleToggleFavoriteKeyDown}
+              className={`inline-flex shrink-0 cursor-pointer items-center justify-center ${
+                isFavorite
+                  ? "text-[#f5c542] hover:text-[#eab308]"
+                  : "text-gray-300 hover:text-gray-400 dark:text-gray-500 dark:hover:text-gray-400"
+              }`}
             >
-              {primaryName}
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M12 2.5l2.93 5.94 6.56.95-4.74 4.62 1.12 6.53L12 17.47 6.13 20.54l1.12-6.53-4.74-4.62 6.56-.95L12 2.5z"
+                />
+              </svg>
+            </span>
+            <div className={`min-w-0 text-left ${COIN_LIST_ROW_CELL_CLASS}`}>
+              <div className="min-w-0 break-words text-[12px] font-normal leading-snug text-gray-900 dark:text-white">
+                {primaryName}
+              </div>
+              <div
+                className={`mt-0.5 whitespace-nowrap text-[11px] font-normal leading-tight ${cnMuted}`}
+              >
+                {pairLabel}
+              </div>
             </div>
-            <div className="mt-0.5 whitespace-nowrap text-[11px] font-normal leading-tight text-[#8b94a1] dark:text-gray-500">
-              {pairLabel}
-            </div>
-          </div>
           </div>
 
           <div
-            className={`${COIN_LIST_ROW_CELL_CLASS} w-full items-end text-right tabular-nums border border-transparent box-border px-2 py-0.5 ${
+            className={`${COIN_LIST_ROW_CELL_CLASS} box-border w-full items-end border border-transparent px-2 py-0.5 text-right tabular-nums ${
               flash ? "animate-price-border-flash" : ""
             }`}
           >
             <div
-              className={`text-[12px] font-normal tabular-nums whitespace-nowrap ${upDownTextClass(domesticChangePercent)} ${
+              className={`${cnNum12} ${upDownTextClass(domesticChangePercent)} ${
                 flash === "up"
                   ? "animate-flash-up"
                   : flash === "down"
@@ -173,39 +170,26 @@ export const CoinRow = memo(
             >
               {domPrice !== undefined ? formatPrice(domPrice) : "-"}
             </div>
-            <div className="text-[11px] text-[#8b94a1] dark:text-gray-500 whitespace-nowrap">
+            <div className={`text-[11px] ${cnMuted} whitespace-nowrap`}>
               {globalKrw !== undefined ? formatPrice(globalKrw) : "-"}
             </div>
           </div>
 
-          <div
-            className={`text-right tabular-nums ${COIN_LIST_ROW_CELL_CLASS}`}
-          >
+          <div className={`text-right tabular-nums ${COIN_LIST_ROW_CELL_CLASS}`}>
             {korp !== undefined ? (
               <div>
-                <div
-                  className={`text-[12px] font-normal tabular-nums whitespace-nowrap ${korpTextClass(korp)}`}
-                >
+                <div className={`${cnNum12} ${korpTextClass(korp)}`}>
                   {korp >= 0 ? "+" : ""}
                   {korp.toFixed(2)}%
                 </div>
                 <div
-                  className={`text-[11px] font-normal whitespace-nowrap tabular-nums ${
+                  className={`${cnNum11} ${
                     domPrice !== undefined && globalKrw !== undefined
                       ? upDownTextClass(domPrice - globalKrw)
-                      : "text-[#8b94a1] dark:text-gray-500"
+                      : cnMuted
                   }`}
                 >
-                  {domPrice !== undefined && globalKrw !== undefined ? (
-                    (() => {
-                      const diff = domPrice - globalKrw;
-                      return `${diff >= 0 ? "+" : "-"}${formatPrice(
-                        Math.abs(diff),
-                      )}`;
-                    })()
-                  ) : (
-                    <span>-</span>
-                  )}
+                  {krwDiffLine ?? "-"}
                 </div>
               </div>
             ) : (
@@ -215,19 +199,13 @@ export const CoinRow = memo(
             )}
           </div>
 
-          <div
-            className={`text-right tabular-nums ${COIN_LIST_ROW_CELL_CLASS}`}
-          >
-            <div
-              className={`text-[12px] font-normal tabular-nums whitespace-nowrap ${upDownTextClass(domesticChangePercent)}`}
-            >
+          <div className={`text-right tabular-nums ${COIN_LIST_ROW_CELL_CLASS}`}>
+            <div className={`${cnNum12} ${upDownTextClass(domesticChangePercent)}`}>
               {domesticChangePercent !== undefined
                 ? `${domesticChangePercent >= 0 ? "+" : ""}${domesticChangePercent.toFixed(2)}%`
                 : "-"}
             </div>
-            <div
-              className={`text-[11px] font-normal whitespace-nowrap tabular-nums ${upDownTextClass(domesticChangeAmount)}`}
-            >
+            <div className={`${cnNum11} ${upDownTextClass(domesticChangeAmount)}`}>
               {domesticChangeAmount !== undefined
                 ? `${domesticChangeAmount >= 0 ? "+" : "-"}${formatPrice(
                     Math.abs(domesticChangeAmount),
@@ -236,10 +214,8 @@ export const CoinRow = memo(
             </div>
           </div>
 
-          <div
-            className={`text-right tabular-nums ${COIN_LIST_ROW_CELL_CLASS}`}
-          >
-            <div className="text-[12px] font-normal tabular-nums whitespace-nowrap text-gray-900 dark:text-white">
+          <div className={`text-right tabular-nums ${COIN_LIST_ROW_CELL_CLASS}`}>
+            <div className={`${cnNum12} text-gray-900 dark:text-white`}>
               {domesticTradeValueKrw !== undefined
                 ? formatTradeValueInMillionsKrw(domesticTradeValueKrw)
                 : "-"}
@@ -249,7 +225,6 @@ export const CoinRow = memo(
       </button>
     );
   },
-  // custom comparator to avoid rerender when unchanged
   (a, b) =>
     a.symbol === b.symbol &&
     a.name === b.name &&

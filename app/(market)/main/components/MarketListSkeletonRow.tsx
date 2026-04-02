@@ -3,7 +3,7 @@
 import {
   COIN_LIST_ROW_CELL_CLASS,
   COIN_LIST_ROW_GRID_CLASS,
-} from "./CoinRow";
+} from "@/lib/coin-list-layout";
 
 export function MarketListSkeletonRow({ keyProp }: { keyProp: number }) {
   void keyProp;
@@ -17,7 +17,7 @@ export function MarketListSkeletonRow({ keyProp }: { keyProp: number }) {
         <div className={`${COIN_LIST_ROW_CELL_CLASS} items-end`}>
           <div className="h-3 w-16 bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
         </div>
-        <div className={`ml-1 ${COIN_LIST_ROW_CELL_CLASS} items-end`}>
+        <div className={`${COIN_LIST_ROW_CELL_CLASS} items-end`}>
           <div className="h-3 w-10 bg-gray-200 dark:bg-gray-700 rounded animate-skeleton" />
         </div>
         <div className={`${COIN_LIST_ROW_CELL_CLASS} items-end`}>

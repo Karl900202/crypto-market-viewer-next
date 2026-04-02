@@ -9,11 +9,12 @@ import {
   formatTradeValueInMillionsKrw,
 } from "@/lib/format-price";
 import {
-  CoinRow,
+  COIN_LIST_SCROLL_AREA_CLASS,
+  COIN_LIST_STICKY_HEADER_CLASS,
   coinListRowGridClass,
   type CoinListLayoutVariant,
-  type PriceFlashDir,
-} from "./CoinRow";
+} from "@/lib/coin-list-layout";
+import { CoinRow, type PriceFlashDir } from "./CoinRow";
 import {
   CoinListSkeletonBody,
   COIN_LIST_ROW_ESTIMATE_PX,
@@ -212,89 +213,83 @@ export const CoinListTable = memo(function CoinListTable(
   });
 
   return (
-    <div
-      ref={scrollParentRef}
-      className="modern-scrollbar flex h-full min-h-0 min-w-0 flex-1 touch-pan-y flex-col overflow-y-auto overflow-x-hidden overscroll-y-contain [-webkit-overflow-scrolling:touch]"
-    >
-      <div
-        className="w-full min-w-0 max-w-full"
-      >
-      <div
-        className={`sticky top-0 z-[1] w-full min-w-0 font-normal ${rowGridClass} bg-muted px-3 py-2.5`}
-      >
-        <NameColumnHeader
-          nameColumnMode={nameColumnMode}
-          onToggleNameColumnMode={onToggleNameColumnMode}
-          t={t}
-        />
-        <HeaderButton
-          sortKey="price"
-          align="right"
-          label={t("table.price")}
-          sort={sort}
-          onToggleSort={onToggleSort}
-        />
-        <HeaderButton
-          sortKey="korp"
-          align="right"
-          label={t("table.korp")}
-          sort={sort}
-          onToggleSort={onToggleSort}
-        />
-        <HeaderButton
-          sortKey="change"
-          align="right"
-          label={t("table.change24h")}
-          sort={sort}
-          onToggleSort={onToggleSort}
-        />
-        <HeaderButton
-          sortKey="volume"
-          align="right"
-          label={t("table.volume24h")}
-          sort={sort}
-          onToggleSort={onToggleSort}
-        />
-      </div>
-
-      {showEmptyState ? (
-        <CoinListSkeletonBody rowGridClass={rowGridClass} />
-      ) : (
-        <div
-          className="relative w-full"
-          style={{ height: virtualizer.getTotalSize() }}
-        >
-          {virtualizer.getVirtualItems().map((virtualRow) => {
-            const coin = coins[virtualRow.index];
-            return (
-              <div
-                key={virtualRow.key}
-                className="absolute left-0 top-0 w-full"
-                style={{ transform: `translateY(${virtualRow.start}px)` }}
-              >
-                <CoinRow
-                  symbol={coin.symbol}
-                  name={coin.name}
-                  nameColumnMode={nameColumnMode}
-                  listLayout={listLayout}
-                  isFavorite={coin.isFavorite}
-                  korp={coin.korp}
-                  domestic={coin.domestic}
-                  globalPriceKrw={coin.globalPriceKrw}
-                  flash={priceFlash.get(coin.symbol) ?? null}
-                  onSelect={onSelect}
-                  onToggleFavorite={onToggleFavorite}
-                  formatPrice={formatPrice}
-                  formatTradeValueInMillionsKrw={formatTradeValueInMillionsKrw}
-                />
-              </div>
-            );
-          })}
+    <div ref={scrollParentRef} className={COIN_LIST_SCROLL_AREA_CLASS}>
+      <div className="flex min-h-0 w-full min-w-0 max-w-full flex-1 flex-col">
+        <div className={`${COIN_LIST_STICKY_HEADER_CLASS} ${rowGridClass}`}>
+          <NameColumnHeader
+            nameColumnMode={nameColumnMode}
+            onToggleNameColumnMode={onToggleNameColumnMode}
+            t={t}
+          />
+          <HeaderButton
+            sortKey="price"
+            align="right"
+            label={t("table.price")}
+            sort={sort}
+            onToggleSort={onToggleSort}
+          />
+          <HeaderButton
+            sortKey="korp"
+            align="right"
+            label={t("table.korp")}
+            sort={sort}
+            onToggleSort={onToggleSort}
+          />
+          <HeaderButton
+            sortKey="change"
+            align="right"
+            label={t("table.change24h")}
+            sort={sort}
+            onToggleSort={onToggleSort}
+          />
+          <HeaderButton
+            sortKey="volume"
+            align="right"
+            label={t("table.volume24h")}
+            sort={sort}
+            onToggleSort={onToggleSort}
+          />
         </div>
-      )}
+
+        {showEmptyState ? (
+          <CoinListSkeletonBody rowGridClass={rowGridClass} />
+        ) : (
+          <div
+            className="relative w-full"
+            style={{ height: virtualizer.getTotalSize() }}
+          >
+            {virtualizer.getVirtualItems().map((virtualRow) => {
+              const coin = coins[virtualRow.index];
+              return (
+                <div
+                  key={virtualRow.key}
+                  className="absolute left-0 top-0 w-full"
+                  style={{ transform: `translateY(${virtualRow.start}px)` }}
+                >
+                  <CoinRow
+                    symbol={coin.symbol}
+                    name={coin.name}
+                    nameColumnMode={nameColumnMode}
+                    listLayout={listLayout}
+                    isFavorite={coin.isFavorite}
+                    korp={coin.korp}
+                    domestic={coin.domestic}
+                    globalPriceKrw={coin.globalPriceKrw}
+                    flash={priceFlash.get(coin.symbol) ?? null}
+                    onSelect={onSelect}
+                    onToggleFavorite={onToggleFavorite}
+                    formatPrice={formatPrice}
+                    formatTradeValueInMillionsKrw={formatTradeValueInMillionsKrw}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
 });
 
+export type { CoinListLayoutVariant } from "@/lib/coin-list-layout";
 export type { NameColumnMode } from "@/lib/name-column-mode";

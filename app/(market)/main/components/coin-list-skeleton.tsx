@@ -1,7 +1,10 @@
 "use client";
 
 import React, { memo, useLayoutEffect, useRef, useState } from "react";
-import { COIN_LIST_ROW_GRID_CLASS } from "./CoinRow";
+import {
+  COIN_LIST_ROW_GRID_CLASS,
+  COIN_LIST_STICKY_HEADER_CLASS,
+} from "@/lib/coin-list-layout";
 
 /** CoinRow: 별+이름(줄바꿈 가능)+페어 + py-2.5 — 가상 스크롤 행 높이 추정 */
 export const COIN_LIST_ROW_ESTIMATE_PX = 64;
@@ -60,7 +63,7 @@ export const CoinListSkeletonTableHeader = memo(
   }) {
     return (
       <div
-        className={`sticky top-0 z-[1] w-full min-w-0 font-normal ${rowGridClass} bg-muted px-3 py-2.5`}
+        className={`${COIN_LIST_STICKY_HEADER_CLASS} ${rowGridClass}`}
         aria-hidden
       >
         <SkeletonBar className="h-3 w-14" />
